@@ -1,0 +1,37 @@
+{
+  "name": "whiteboard-app",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "yarn@1.22.22",
+  "scripts": {
+    "dev": "next dev --webpack",
+    "dev:3000": "next dev --webpack --port 3000",
+    "dev:3001": "next dev --webpack --port 3001",
+    "dev:testing": "next dev --webpack --port 3002",
+    "build": "next build --webpack",
+    "start": "next start",
+    "lint": "eslint",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "next": "16.2.6",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@tailwindcss/postcss": "^4",
+    "@testing-library/jest-dom": "^6.0.0",
+    "@testing-library/react": "^14.0.0",
+    "@testing-library/user-event": "^14.6.0",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.6",
+    "jsdom": "^22.1.0",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vitest": "^1.6.1"
+  }
+}

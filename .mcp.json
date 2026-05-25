@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "whiteboard-rink": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["tsx", "mcp-server/index.ts"],
+      "env": {
+        "WHITEBOARD_APP_URL": "http://localhost:3000"
+      }
+    }
+  }
+}
