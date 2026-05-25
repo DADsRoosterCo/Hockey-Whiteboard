@@ -1,8 +1,7 @@
 import type { SerializedActorRoute, SerializedActorRouteBezierNode } from "./routeProjection"
 import { sampleBezierRouteToTimedPoints } from "./routeProjection"
-import { buildPathMetrics, progressAtFootDistance } from "./pathMetrics"
 import { getTravelDistanceFeet } from "./motionProfiles"
-import type { TimedPathPoint } from "./eventDerivation"
+import type { TimedPathPoint, RuntimePathAction } from "./eventDerivation"
 
 function distanceBetween(a: { xFt: number; yFt: number }, b: { xFt: number; yFt: number }) {
   const dx = b.xFt - a.xFt
@@ -98,7 +97,7 @@ export function generateFramePointsForRoute(
     // prefer explicit breakType metadata (e.g. 'stop'|'pivot') over legacy action fields
     const spNodeAction = sp.metadata?.breakType ?? sp.action ?? sp.metadata?.action ?? sp.metadata?.nodeAction
     if (spNodeAction) {
-      if (!existing.action) existing.action = spNodeAction as any
+      if (!existing.action && typeof spNodeAction === "string") existing.action = spNodeAction as RuntimePathAction
       if (spNodeAction === "stop") {
         const nextIdx = Math.min(frames.length - 1, clamped + 1)
         if (frames[nextIdx]) {

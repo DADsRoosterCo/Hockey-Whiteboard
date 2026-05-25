@@ -49,10 +49,8 @@ type SelectedPoint = {
 
 type EditorTool =
   | "select"
-  | "erase"
   | "player"
   | "lineup"
-  | "arrow"
   | "draw"
   | "zone"
   | SerializedAnnotationType;
@@ -224,21 +222,19 @@ type EditorToolItem = { label: string; value: EditorTool; icon: string };
 
 const EDITOR_TOOL_ITEMS: EditorToolItem[] = [
   { label: "Select / Move", value: "select", icon: "↖" },
-  { label: "Erase", value: "erase", icon: "□" },
   { label: "Player", value: "player", icon: "●" },
   { label: "Cone", value: "cone", icon: "▲" },
   { label: "Net", value: "net", icon: "⊟" },
   { label: "Text", value: "text", icon: "T" },
   { label: "Pucks", value: "puck", icon: "⬤" },
   { label: "Lineup", value: "lineup", icon: "≡" },
-  { label: "Arrow", value: "arrow", icon: "→" },
   { label: "Draw", value: "draw", icon: "∿" },
   { label: "Zone", value: "zone", icon: "▦" },
 ];
 
-const POSITION_TYPES = ["F", "D", "C", "G", "X", "O", "N"] as const;
+const _POSITION_TYPES = ["F", "D", "C", "G", "X", "O", "N"] as const;
 
-const GOALIE_MOVEMENT_OPTIONS: Array<{ label: string; value: ActorEditorState["goalieMovement"] }> = [
+const _GOALIE_MOVEMENT_OPTIONS: Array<{ label: string; value: ActorEditorState["goalieMovement"] }> = [
   { label: "None", value: "none" },
   { label: "Padslide", value: "padslide" },
   { label: "Butterfly", value: "butterflyslide" },
@@ -253,7 +249,7 @@ const SPEED_OPTIONS = [
   { icon: "⚡", title: "Top speed" },
 ] as const;
 
-const TEAM_BUTTONS: Array<{ label: string; value: SerializedActor["teamRole"] }> = [
+const _TEAM_BUTTONS: Array<{ label: string; value: SerializedActor["teamRole"] }> = [
   { label: "X", value: "away" },
   { label: "O", value: "home" },
   { label: "N", value: "neutral" },
@@ -268,7 +264,7 @@ const DRILL_CATEGORIES = [
   "SIDE AREA WALL BACK",
 ];
 
-const ACTION_OPTIONS: Array<{ label: string; value: RuntimePathAction }> = [
+const _ACTION_OPTIONS: Array<{ label: string; value: RuntimePathAction }> = [
   { label: "Carry", value: "carry" },
   { label: "Pass", value: "pass" },
   { label: "Receive", value: "receive" },
@@ -281,7 +277,7 @@ const FREEHAND_TURN_THRESHOLD_DEG = 22;
 const MAX_SEGMENT_DURATION_SEC = 2;
 const TAP_DRAG_THRESHOLD_FT = 1.25;
 const ROUTE_NODE_HIT_RADIUS_FT = 6.5;
-const BEZIER_HANDLE_HIT_RADIUS_FT = 6;
+const _BEZIER_HANDLE_HIT_RADIUS_FT = 6;
 const BEZIER_HANDLE_LEADER_EXT_FT = 7;
 
 function getBezierHandleDisplayPos(
@@ -349,7 +345,6 @@ export function RinkHome() {
   const [legendOpen, setLegendOpen] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
   const [routeGestureMode, setRouteGestureMode] = useState<RouteGestureMode>("extend");
-  const [isLineEditingActive, setIsLineEditingActive] = useState(false);
   const [pieMenuOpen, setPieMenuOpen] = useState(false);
 
   const derivedEvents = useMemo(() => deriveEventsForDrill({
@@ -393,10 +388,6 @@ export function RinkHome() {
     || (pieMenuOpen && selectedRouteActorId !== null);
   const activeActorEditor = getActorEditorState(activeActor);
   const activeRouteLineType = useMemo(() => getRouteLineType(activeActorEditor), [activeActorEditor]);
-  const panelEyebrow = activeAnnotation ? "Object" : "Player";
-  const panelTitle = activeAnnotation
-    ? activeAnnotation.label?.trim() || `${capitalize(activeAnnotation.type)} marker`
-    : activeActor?.name ?? "Player";
   const routeLegendItems = useMemo<RouteLegendItem[]>(() => [
     { label: "Direction", lineType: "skate", active: activeRouteLineType === "skate" },
     { label: "Skate", lineType: "skate", active: activeRouteLineType === "skate" },
@@ -649,7 +640,6 @@ export function RinkHome() {
     }
 
     if (event.key !== "Escape") return;
-    if (isLineEditingActive) setIsLineEditingActive(false);
     setSelectedNodeIndex(null);
     setPieMenuOpen(false);
   });
@@ -891,8 +881,6 @@ export function RinkHome() {
     }));
 
     setRouteGestureMode("extend");
-    setIsLineEditingActive(true);
-    setNotification("Player placed. Drag on the ice to sketch curves, or click to place straight route points.");
   }
 
   function removeActor(actorId: string | null) {
@@ -991,24 +979,6 @@ export function RinkHome() {
     setSelectedPoint({ xFt: point.xFt, yFt: point.yFt, zoneNames });
   }
 
-  function commitFreehandPath(actorId: string, drawnPoints: Array<{ xFt: number; yFt: number }>) {
-    if (drawnPoints.length === 0) return;
-    const fittedPoints = fitFreehandCurveAnchors(drawnPoints);
-    updateWithHistory((current) => ({
-      ...current,
-      activeActorId: actorId,
-      paths: current.paths.map((path) => {
-        if (path.actorId !== actorId) return path;
-        const actor = current.actors.find((entry) => entry.id === actorId);
-        const maxFtPerSec = getEffectiveActorMaxFtPerSec(ageGroup, actor);
-        return {
-          ...path,
-          points: fitPathPointsToLine(path.points, fittedPoints, current.nextAction, maxFtPerSec),
-        };
-      }),
-    }));
-  }
-
   function commitFreehandDrawLine(drawnPoints: Array<{ xFt: number; yFt: number }>) {
     if (drawnPoints.length < 2) return;
     const fittedPoints = fitFreehandCurveAnchors(drawnPoints);
@@ -1029,7 +999,7 @@ export function RinkHome() {
       }));
       setActiveTool("select");
     } else {
-      // Normal mode: create a new draw line
+      // Normal mode: create a new standalone draw line
       const id = `draw-line-${Date.now()}-${nextDrawLineIdRef.current++}`;
       const newLine: SerializedDrawLine = { id, points: fittedPoints, totalLengthFt: measurePolylineDistanceFeet(fittedPoints), attachedActorId: null };
       updateWithHistory((current) => ({
@@ -1041,7 +1011,7 @@ export function RinkHome() {
     setPieMenuOpen(true);
   }
 
-  function attachPlayerToDrawLine(drawLineId: string, actorId: string) {
+  function _attachPlayerToDrawLine(drawLineId: string, actorId: string) {
     const drawLine = drawLines.find((l) => l.id === drawLineId);
     if (!drawLine || drawLine.points.length < 2) return;
     const actor = actors.find((a) => a.id === actorId);
@@ -1136,11 +1106,6 @@ export function RinkHome() {
   }
 
   function handleDrawLinePointerDown(event: React.PointerEvent, drawLineId: string) {
-    if (activeTool === "erase") {
-      event.stopPropagation();
-      removeDrawLine(drawLineId);
-      return;
-    }
     event.stopPropagation();
 
     // If already selected in move mode, start a translate drag
@@ -1168,50 +1133,6 @@ export function RinkHome() {
     setPieMenuOpen(true);
   }
 
-  function appendPointToActivePath(point: { xFt: number; yFt: number }) {
-    const maxFtPerSec = getEffectiveActorMaxFtPerSec(ageGroup, activeActor);
-    const lastPoint = paths.find((p) => p.actorId === activeActorId)?.points.at(-1) ?? null;
-    const segSteps = lastPoint
-      ? Math.max(1, Math.ceil(Math.hypot(point.xFt - lastPoint.xFt, point.yFt - lastPoint.yFt) / (maxFtPerSec * MAX_SEGMENT_DURATION_SEC)))
-      : 1;
-
-    updateWithHistory((current) => ({
-      ...current,
-      paths: current.paths.map((path) => {
-        if (path.actorId !== current.activeActorId) return path;
-        const last = path.points.at(-1);
-        const lastTimeSec = last ? (last.timeSec ?? path.points.length - 1) : -1;
-
-        if (!last) {
-          return { ...path, points: [{ xFt: point.xFt, yFt: point.yFt, timeSec: 0, action: current.nextAction }] };
-        }
-
-        const segDx = point.xFt - last.xFt;
-        const segDy = point.yFt - last.yFt;
-        const segDist = Math.hypot(segDx, segDy);
-        const segDurationSec = Number.isFinite(maxFtPerSec) && maxFtPerSec > 0
-          ? segDist / maxFtPerSec
-          : segSteps;
-        const newPoints = Array.from({ length: segSteps }, (_, i) => {
-          const frac = (i + 1) / segSteps;
-          const isAnchor = i === segSteps - 1;
-          return {
-            xFt: last.xFt + segDx * frac,
-            yFt: last.yFt + segDy * frac,
-            timeSec: lastTimeSec + frac * segDurationSec,
-            action: isAnchor ? current.nextAction : ("carry" as RuntimePathAction),
-            metadata: isAnchor ? undefined : { autoInserted: true },
-          };
-        });
-        return { ...path, points: [...path.points, ...newPoints] };
-      }),
-    }));
-
-    if (segSteps > 1) {
-      setNotification(`Inserted ${segSteps - 1} intermediate node${segSteps > 2 ? "s" : ""} (speed limit).`);
-    }
-  }
-
   function resetActivePath() {
     updateWithHistory((current) => ({
       ...current,
@@ -1235,7 +1156,7 @@ export function RinkHome() {
     }));
   }
 
-  function updateNodeAction(nodeIndex: number, action: RuntimePathAction) {
+  function _updateNodeAction(nodeIndex: number, action: RuntimePathAction) {
     updateWithHistory((snap) => ({
       ...snap,
       paths: snap.paths.map((p) =>
@@ -1246,7 +1167,7 @@ export function RinkHome() {
     }));
   }
 
-  function updateNodePassTarget(nodeIndex: number, targetActorId: string | null) {
+  function _updateNodePassTarget(nodeIndex: number, targetActorId: string | null) {
     updateWithHistory((snap) => ({
       ...snap,
       paths: snap.paths.map((p) => {
@@ -1268,7 +1189,7 @@ export function RinkHome() {
     }));
   }
 
-  function updateNodeBreakType(nodeIndex: number, breakType: NodeBreakType | null) {
+  function _updateNodeBreakType(nodeIndex: number, breakType: NodeBreakType | null) {
     updateWithHistory((snap) => ({
       ...snap,
       paths: snap.paths.map((p) => {
@@ -1312,7 +1233,6 @@ export function RinkHome() {
     setPlaybackTimeSec(0);
     setDragState(null);
     setRouteGestureMode("extend");
-    setIsLineEditingActive(false);
   }
 
   function updatePathPointPosition(actorId: string, pointIndex: number, point: { xFt: number; yFt: number }) {
@@ -1407,7 +1327,7 @@ export function RinkHome() {
     ));
   }
 
-  function updateAnnotationTeamRole(annotationId: string, teamRole: SerializedAnnotation["teamRole"]) {
+  function _updateAnnotationTeamRole(annotationId: string, teamRole: SerializedAnnotation["teamRole"]) {
     updateWithHistory((current) => ({
       ...current,
       annotations: current.annotations.map((a) =>
@@ -1484,29 +1404,22 @@ export function RinkHome() {
     updateSelectedPoint(point);
 
     if (activeTool === "select") {
-      if (!isLineEditingActive) {
-        clearCanvasSelection();
-        return;
-      }
-      setSelectedAnnotationId(null);
-      setSelectedRouteActorId(activeActorId);
-      appendPointToActivePath(point);
+      clearCanvasSelection();
       return;
     }
-    if (activeTool === "erase") return;
     if (activeTool === "player") {
       setSelectedAnnotationId(null);
       placeNewPlayerAtPoint(activeActor?.teamRole ?? "home", point);
       return;
     }
-    if (activeTool === "lineup" || activeTool === "arrow" || activeTool === "draw" || activeTool === "zone") {
+    if (activeTool === "lineup" || activeTool === "draw" || activeTool === "zone") {
       return;
     }
     addAnnotation(activeTool as SerializedAnnotationType, point);
   }
 
   function handleOverlayPointerDown(event: React.PointerEvent<SVGSVGElement>) {
-    const isSketchGesture = activeTool === "draw" || (activeTool === "select" && isLineEditingActive);
+    const isSketchGesture = activeTool === "draw";
     if (dragState || bezierDragRef.current || !isSketchGesture) return;
 
     const target = event.target as HTMLElement;
@@ -1520,18 +1433,8 @@ export function RinkHome() {
     let actorIdForDraft: string | null;
     let initialPoints: Array<{ xFt: number; yFt: number }>;
 
-    if (activeTool === "draw") {
-      // Standalone draw line — not tied to any actor
-      actorIdForDraft = null;
-      initialPoints = [point];
-    } else {
-      // Freehand extending active actor's path
-      const lastPoint = paths.find((path) => path.actorId === activeActorId)?.points.at(-1);
-      actorIdForDraft = activeActorId;
-      initialPoints = lastPoint && distanceBetweenPoints(lastPoint, point) > 0.2
-        ? [{ xFt: lastPoint.xFt, yFt: lastPoint.yFt }, point]
-        : [point];
-    }
+    actorIdForDraft = null;
+    initialPoints = [point];
 
     dragMovedRef.current = false;
     setSelectedAnnotationId(null);
@@ -1544,12 +1447,6 @@ export function RinkHome() {
   }
 
   function handleActorTokenPointerDown(event: React.PointerEvent<SVGGElement>, actorId: string) {
-    if (activeTool === "erase") {
-      event.stopPropagation();
-      removeActor(actorId);
-      return;
-    }
-
     const path = paths.find((entry) => entry.actorId === actorId);
     if (!path?.points.length) return;
 
@@ -1565,7 +1462,6 @@ export function RinkHome() {
     setSelectedAnnotationId(null);
     setSelectedNodeIndex(null);
     setActiveTool("select");
-    setIsLineEditingActive(false);
     updateSelectedPoint(pointerPoint);
     setPieMenuOpen(false);
     pendingSelectionGestureRef.current = {
@@ -1586,7 +1482,6 @@ export function RinkHome() {
     setSelectedRouteActorId(actorId);
     setSelectedAnnotationId(null);
     setActiveTool("select");
-    setIsLineEditingActive(false);
     setDragState({ kind: "path-point", actorId, pointIndex });
   }
 
@@ -1727,12 +1622,6 @@ export function RinkHome() {
   }
 
   function handleAnnotationPointerDown(event: React.PointerEvent<SVGGElement>, annotationId: string) {
-    if (activeTool === "erase") {
-      event.stopPropagation();
-      removeAnnotation(annotationId);
-      return;
-    }
-
     const pointerPoint = getRinkPointFromPointer(event.clientX, event.clientY);
 
     event.stopPropagation();
@@ -1742,7 +1631,6 @@ export function RinkHome() {
     setSelectedDrawLineId(null);
     setSelectedRouteActorId(null);
     setActiveTool("select");
-    setIsLineEditingActive(false);
     setSelectedNodeIndex(null);
     setPieMenuOpen(false);
     if (pointerPoint) {
@@ -1799,15 +1687,7 @@ export function RinkHome() {
             point,
           );
         } else {
-          const initialPoints = [
-            { xFt: pendingGesture.draftStart.xFt, yFt: pendingGesture.draftStart.yFt },
-            point,
-          ];
-          setIsLineEditingActive(true);
-          freehandDraftRef.current = { actorId: pendingGesture.actorId, pointerId: event.pointerId, points: initialPoints };
-          setFreehandDraftActorId(pendingGesture.actorId);
-          setFreehandDraftPoints(initialPoints);
-          overlaySvgRef.current?.setPointerCapture(event.pointerId);
+          // Player route drawing is disabled
         }
       } else {
         setDragState({ kind: "annotation", annotationId: pendingGesture.annotationId });
@@ -1928,7 +1808,6 @@ export function RinkHome() {
       freehandDraftRef.current = null;
       setFreehandDraftActorId(null);
       setFreehandDraftPoints([]);
-      setIsLineEditingActive(false);
 
       dragMovedRef.current = true;
 
@@ -1941,11 +1820,7 @@ export function RinkHome() {
         updateSelectedPoint(point);
       }
 
-      if (freehandDraft.actorId === null) {
-        commitFreehandDrawLine(completedPoints);
-      } else {
-        commitFreehandPath(freehandDraft.actorId, completedPoints);
-      }
+      commitFreehandDrawLine(completedPoints);
       return;
     }
 
@@ -2013,7 +1888,6 @@ export function RinkHome() {
                 type="button"
                 onClick={() => {
                   setActiveTool(item.value);
-                  setIsLineEditingActive(false);
                 }}
                 className={`wb-tool-btn${activeTool === item.value ? " wb-tool-btn--active" : ""}`}
               >
@@ -2261,7 +2135,7 @@ export function RinkHome() {
               const pathData = curved && bezierNodes
                 ? buildActorRoutePathData(path.points, bezierNodes, true)
                 : buildOverlayPathData(path.points, showCurvedPaths, curveIntensity);
-              const showHandles = isActive && activeTool === "select" && !isLineEditingActive && !isDrawLineAttached && bezierNodes && path.points.length > 1 && curved;
+              const showHandles = isActive && activeTool === "select" && !isDrawLineAttached && bezierNodes && path.points.length > 1 && curved;
 
               return (
                 <g key={path.id}>
@@ -2323,7 +2197,7 @@ export function RinkHome() {
                     }
 
                     const isSelectedNode = isActive && index === selectedNodeIndex;
-                    const showNodeCircles = isLineEditingActive && !isDrawLineAttached;
+                    const showNodeCircles = false;
                     const nodeActionColor: Record<string, string> = { pass: "#f59e0b", receive: "#22c55e", shot: "#ef4444" };
                     const actionIndicator = point.action && point.action !== "carry" ? point.action[0].toUpperCase() : null;
                     const breakType = getNodeBreakType(point);
@@ -2526,6 +2400,7 @@ export function RinkHome() {
 
           {/* Actor pie menu */}
           {pieMenuOpen && !activeAnnotation && !selectedDrawLineId && actorPieMenuPosition && activeActor && (() => {
+            if (!activeActorId) return null;
             const trashIcon = (
               <g>
                 <rect x="-6" y="-2" width="12" height="10" rx="2" fill="currentColor" />
@@ -2655,50 +2530,6 @@ export function RinkHome() {
                 action: () => updateActorEditorState(activeActorId, { hasPuck: !activeActorEditor.hasPuck }),
               },
               {
-                id: "path",
-                label: "PATH",
-                icon: pathIcon,
-                iconColor: "#ffffff",
-                subItems: [
-                  ...(drawLines.find((l) => l.attachedActorId === activeActorId) ? [{
-                    id: "path-detach",
-                    label: "Detach Line",
-                    action: () => {
-                      const dl = drawLines.find((l) => l.attachedActorId === activeActorId);
-                      if (dl) detachPlayerFromDrawLine(dl.id);
-                      setPieMenuOpen(false);
-                    },
-                  }] : [
-                    {
-                      id: "path-edit",
-                      label: "Edit",
-                      active: isLineEditingActive,
-                      action: () => {
-                        setRouteGestureMode("extend");
-                        setIsLineEditingActive(true);
-                      },
-                    },
-                    {
-                      id: "path-new",
-                      label: "New",
-                      action: () => {
-                        resetActivePath();
-                        setRouteGestureMode("extend");
-                        setIsLineEditingActive(true);
-                      },
-                    },
-                    {
-                      id: "path-remove",
-                      label: "Remove",
-                      action: () => {
-                        resetActivePath();
-                        setIsLineEditingActive(false);
-                      },
-                    },
-                  ]),
-                ],
-              },
-              {
                 id: "move",
                 label: "MOVE",
                 icon: moveIcon,
@@ -2706,7 +2537,6 @@ export function RinkHome() {
                 active: routeGestureMode === "move-route",
                 action: () => {
                   setRouteGestureMode("move-route");
-                  setIsLineEditingActive(false);
                 },
               },
               {
@@ -2837,6 +2667,13 @@ export function RinkHome() {
 
           {/* Annotation pie menu */}
           {pieMenuOpen && activeAnnotation && annotationPieMenuPosition && (() => {
+            const trashIcon = (
+              <g>
+                <rect x="-6" y="-2" width="12" height="10" rx="2" fill="currentColor" />
+                <rect x="-8" y="-4" width="16" height="2" rx="1" fill="currentColor" />
+                <rect x="-3" y="-7" width="6" height="2" rx="1" fill="currentColor" />
+              </g>
+            );
             const annotationItems: PieMenuItem[] = [
               {
                 id: "delete",
@@ -3250,10 +3087,6 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-function capitalize(value: string): string {
-  return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
 function getActorShortLabel(value: string): string {
   const parts = value.split(/\s+/).map((s) => s.trim()).filter(Boolean);
   if (parts.length === 0) return "NA";
@@ -3271,7 +3104,7 @@ function getNextPositionLabelForTeam(teamRole: SerializedActor["teamRole"], curr
   const teamActors = currentActors.filter((a) => (a.teamRole ?? "neutral") === team);
   const counts: Record<string, number> = {};
   for (const a of teamActors) {
-    const metaPos = a.metadata && typeof a.metadata === "object" && typeof (a.metadata as any).positionTag === "string" ? (a.metadata as any).positionTag : undefined;
+    const metaPos = isRecord(a.metadata) && typeof a.metadata["positionTag"] === "string" ? a.metadata["positionTag"] : undefined;
     const namePos = typeof a.name === "string" && /^[FDC]\d+/.test(a.name) ? a.name[0] : undefined;
     const pos = (metaPos as string) ?? (namePos as string) ?? undefined;
     if (pos) counts[pos] = (counts[pos] ?? 0) + 1;

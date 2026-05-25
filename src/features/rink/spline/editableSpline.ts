@@ -190,7 +190,6 @@ export function removeAnchor(
   if (idx === -1) return spline;
 
   const anchors = spline.anchors.filter((a) => a.id !== anchorId);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { [anchorId]: _removed, ...handles } = spline.handles;
 
   if (idx > 0) _recomputeHandlesAround(anchors, handles, idx - 1);

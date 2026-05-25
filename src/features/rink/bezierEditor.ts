@@ -1,4 +1,3 @@
-import type { TimedPathPoint } from "./runtime/eventDerivation";
 import type { SerializedActorRouteBezierNode, SerializedActorRouteNode } from "./runtime/routeProjection";
 
 // Lightweight bezier editor helpers operating in feet coordinates used by the UI.
@@ -56,7 +55,6 @@ export function moveRouteBezierNode(
   nodeIndex: number,
   point: { xFt: number; yFt: number },
 ): SerializedActorRouteBezierNode[] {
-  // eslint-disable-next-line no-console
   console.log("moveRouteBezierNode called", { nodeIndex, point, count: bezierNodes?.length });
   return bezierNodes.map((node, i) => {
     if (i !== nodeIndex) return { ...node, cp1Ft: node.cp1Ft ? { ...node.cp1Ft } : undefined, cp2Ft: node.cp2Ft ? { ...node.cp2Ft } : undefined };
@@ -78,7 +76,6 @@ export function moveRouteBezierHandle(
   handleType: "cp1Ft" | "cp2Ft",
   point: { xFt: number; yFt: number },
 ): SerializedActorRouteBezierNode[] {
-  // eslint-disable-next-line no-console
   console.log("moveRouteBezierHandle called", { nodeIndex, handleType, point, count: bezierNodes?.length });
   return bezierNodes.map((node, i) => {
     if (i !== nodeIndex) return { ...node, cp1Ft: node.cp1Ft ? { ...node.cp1Ft } : undefined, cp2Ft: node.cp2Ft ? { ...node.cp2Ft } : undefined };

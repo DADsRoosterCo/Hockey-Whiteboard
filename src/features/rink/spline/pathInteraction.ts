@@ -246,7 +246,7 @@ export function onPointerUp(
 
 // Importing React here keeps the hook co-located without making the
 // pure functions above React-dependent.
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 
 export interface UsePathInteractionOptions {
   /** SVG element whose coordinate system is in rink feet. */
@@ -304,8 +304,10 @@ export function usePathInteraction(
   // Keep a ref so event handlers always see the latest values without stale closure issues.
   const stateRef = useRef(interactionState);
   const splineRef = useRef(spline);
-  stateRef.current = interactionState;
-  splineRef.current = spline;
+  useLayoutEffect(() => {
+    stateRef.current = interactionState;
+    splineRef.current = spline;
+  });
 
   const applyResult = useCallback(
     (result: PointerDownResult | PointerMoveResult | PointerUpResult, commit: boolean) => {

@@ -292,12 +292,12 @@ export function PieMenu({ leftPx, topPx, items, centerLabel, onClose }: PieMenuP
                   const subMid = subStart + subSliceDeg / 2;
                   const sx = CX + SUB_ICON_R * Math.cos(toRad(subMid));
                   const sy = CY + SUB_ICON_R * Math.sin(toRad(subMid));
-                  const slx = CX + SUB_LABEL_R * Math.cos(toRad(subMid));
-                  const sly = CY + SUB_LABEL_R * Math.sin(toRad(subMid));
+                  const _slx = CX + SUB_LABEL_R * Math.cos(toRad(subMid));
+                  const _sly = CY + SUB_LABEL_R * Math.sin(toRad(subMid));
                   // Compute approximate available arc length for this sub-label and use it to constrain text
                   const subRad = (subEnd - subStart) * (Math.PI / 180);
                   const approxArcLen = subRad * SUB_LABEL_R;
-                  const textLen = Math.max(28, approxArcLen * 0.85);
+                  const _textLen = Math.max(28, approxArcLen * 0.85);
                   const isSpeedSub = item.id === "skate" && subItem.id.startsWith?.("skate-speed-");
                   const subCls = [
                     "wb-pie-sub-slice",

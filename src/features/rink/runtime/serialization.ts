@@ -387,8 +387,9 @@ function normalizeAnnotations(annotations: SerializedAnnotation[] | undefined): 
     // the supported runtime annotation type 'stroke'. This prevents the
     // serializer from throwing on older or dev-generated data after the UI
     // removed Arrow/Draw tools.
-    let resolvedType: unknown = annotation.type
-    if (annotation.type === "arrow" || annotation.type === "draw") {
+    const rawType = annotation.type as string
+    let resolvedType: unknown = rawType
+    if (rawType === "arrow" || rawType === "draw") {
       resolvedType = "stroke"
     }
 

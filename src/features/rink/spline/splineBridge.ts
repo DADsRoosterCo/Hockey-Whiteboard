@@ -17,7 +17,7 @@ import { createSpline } from "./editableSpline";
 
 /** Determine the AnchorNodeType from a path point's metadata. */
 function anchorTypeFromMetadata(pt: TimedPathPoint): AnchorNodeType {
-  const bt = (pt as any)?.metadata?.breakType as string | undefined;
+  const bt = pt.metadata?.["breakType"] as string | undefined;
   if (bt === "stop")  return "sharpStop";
   if (bt === "pivot") return "sharpPivot";
   return "smooth";

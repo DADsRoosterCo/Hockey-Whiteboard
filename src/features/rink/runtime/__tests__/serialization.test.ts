@@ -53,6 +53,7 @@ describe("drill serialization", () => {
         },
       ],
       derivedEvents: [],
+      drawLines: [],
     }
 
     const serialized = serializeDrill(drill)

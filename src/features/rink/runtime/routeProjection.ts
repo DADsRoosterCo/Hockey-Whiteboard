@@ -1,4 +1,4 @@
-import { buildPathMetrics, type PathMetrics, progressAtFootDistance } from "./pathMetrics"
+import { buildPathMetrics, type PathMetrics } from "./pathMetrics"
 import type { TimedPathPoint } from "./eventDerivation"
 import { getTravelDistanceFeet } from "./motionProfiles"
 
@@ -243,7 +243,6 @@ export function generateFramesFromRoute(
     const safeIndex = Math.max(0, Math.min(segIndex, Math.max(0, metrics.segments.length - 1)))
     let seg = metrics.segments[safeIndex]
     if (!seg) {
-      // eslint-disable-next-line no-console
       console.warn("generateFramesFromRoute: no segment available after clamping", { segIndex, safeIndex, segments: metrics.segments.length, desiredDistance })
       // create a fallback zero-length segment
       seg = { cumulativeFootStart: 0, footLength: 0, normLength: 0, cumulativeNormStart: 0 }
@@ -269,13 +268,9 @@ export function generateFramesFromRoute(
   for (let nodeIndex = 0; nodeIndex < route.nodes.length; nodeIndex += 1) {
     const anchor = route.nodes[nodeIndex]
     // find nearest sampled point index for anchor
-    let cumulative = 0
     let foundDist = 0
     let foundIndex = 0
     for (let s = 0; s < sampled.length - 1; s += 1) {
-      const dx = sampled[s + 1].xFt - sampled[s].xFt
-      const dy = sampled[s + 1].yFt - sampled[s].yFt
-      const segLen = Math.hypot(dx, dy)
       const dxA = anchor.xFt - sampled[s].xFt
       const dyA = anchor.yFt - sampled[s].yFt
       const distToSample = Math.hypot(dxA, dyA)
@@ -284,7 +279,6 @@ export function generateFramesFromRoute(
         foundIndex = s
         foundDist = distToSample
       }
-      cumulative += segLen
     }
 
     // anchor cumulative distance approx
@@ -296,10 +290,10 @@ export function generateFramesFromRoute(
     if (anchor.action !== undefined) target.action = anchor.action
     if (anchor.metadata !== undefined) target.metadata = anchor.metadata
     // Node-level semantics: nodeType hard -> mark action in metadata if not part of RuntimePathAction
-    if ((anchor as any).nodeType === "hard") {
-      const nodeAction = (anchor as any).metadata?.breakType ?? (anchor as any).action ?? anchor.metadata?.action ?? anchor.metadata?.nodeAction
+    if (anchor.nodeType === "hard") {
+      const nodeAction = anchor.metadata?.["breakType"] ?? anchor.action ?? anchor.metadata?.["action"] ?? anchor.metadata?.["nodeAction"]
       if (nodeAction === "stop") {
-        target.action = "stop" as any
+        target.action = "stop"
         // duplicate same position into next frame to represent a pause if available
         const nextIdx = Math.min(frames.length - 1, clampedFrameIndex + 1)
         if (frames[nextIdx]) {
@@ -307,7 +301,7 @@ export function generateFramesFromRoute(
           frames[nextIdx].yFt = target.yFt
         }
       } else if (nodeAction === "pivot") {
-        target.action = "pivot" as any
+        target.action = "pivot"
         target.metadata = { ...(target.metadata ?? {}), pivot: anchor.metadata }
       }
     }
