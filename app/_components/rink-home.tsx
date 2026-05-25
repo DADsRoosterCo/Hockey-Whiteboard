@@ -2231,6 +2231,11 @@ export function RinkHome() {
                     const shortLabel = getActorTokenLabel(actor, path.actorId);
                     const stageLabel = isTokenNode ? shortLabel : String(index);
 
+                    // For actors attached to a draw line the PlaybackLayer renders
+                    // the moving token. Hide the static token once the timeline has
+                    // advanced past zero to avoid a duplicate.
+                    if (isTokenNode && isDrawLineAttached && playbackTimeSec > 0) return null;
+
                     if (isTokenNode) {
                       return (
                         <g
