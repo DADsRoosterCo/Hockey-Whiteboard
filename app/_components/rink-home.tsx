@@ -3940,9 +3940,14 @@ function fitPathPointsToLine(
     ...normalizedDrawnPoints,
   ]);
 
+  const taggedExtension = extensionPoints.map((pt, i, arr) => ({
+    ...pt,
+    action: i === arr.length - 1 ? finalAction : pt.action ?? "carry" as RuntimePathAction,
+  }));
+
   const combinedPoints = dedupeSequentialPoints([
     ...existingPrefix,
-    ...resampleFreehandExtension(extensionPoints, maxFtPerSec, finalAction),
+    ...taggedExtension,
   ]);
 
   if (combinedPoints.length === 0) {
@@ -3957,56 +3962,6 @@ function fitPathPointsToLine(
     ...point,
     action: index === arr.length - 1 ? finalAction : point.action ?? "carry",
   }));
-}
-
-function resampleFreehandExtension(
-  points: Array<Pick<TimedPathPoint, "xFt" | "yFt" | "action" | "metadata">>,
-  maxFtPerSec: number,
-  finalAction: RuntimePathAction,
-): Array<Pick<TimedPathPoint, "xFt" | "yFt" | "action" | "metadata">> {
-  if (points.length === 0) {
-    return [];
-  }
-
-  if (points.length === 1 || !Number.isFinite(maxFtPerSec) || maxFtPerSec <= 0) {
-    return points.map((point, index) => ({
-      xFt: point.xFt,
-      yFt: point.yFt,
-      action: index === points.length - 1 ? finalAction : point.action ?? "carry",
-      metadata: point.metadata,
-    }));
-  }
-
-  const metrics = buildPathMetrics(points);
-  if (metrics.totalFootLength <= 0) {
-    return points.map((point, index) => ({
-      ...point,
-      action: index === points.length - 1 ? finalAction : point.action ?? "carry",
-    }));
-  }
-
-  const maxNodeSpacingFt = maxFtPerSec * MAX_SEGMENT_DURATION_SEC;
-  const result: Array<Pick<TimedPathPoint, "xFt" | "yFt" | "action" | "metadata">> = [{
-    ...points[0],
-    action: points[0].action ?? "carry",
-  }];
-
-  for (let distanceFt = maxNodeSpacingFt; distanceFt < metrics.totalFootLength; distanceFt += maxNodeSpacingFt) {
-    result.push({
-      ...samplePointAlongPolyline(points, distanceFt),
-      action: "carry",
-      metadata: { autoInserted: true, preserveOnRespeed: true },
-    });
-  }
-
-  const lastPoint = points[points.length - 1];
-  result.push({
-    ...lastPoint,
-    action: finalAction,
-    metadata: lastPoint.metadata,
-  });
-
-  return dedupeSequentialPoints(result);
 }
 
 function samplePointAlongPolyline(
