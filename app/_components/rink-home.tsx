@@ -405,7 +405,23 @@ export function RinkHome() {
     { label: "Goalie Padslide", lineType: "goalie-padslide", active: activeRouteLineType === "goalie-padslide" },
     { label: "Goalie Butterflyslide", lineType: "goalie-butterflyslide", active: activeRouteLineType === "goalie-butterflyslide" },
   ], [activePath, activeRouteLineType, nextAction, selectedNodeIndex]);
-  const playbackWindow = useMemo(() => getDrillPlaybackWindow(paths), [paths]);
+  const playbackWindow = useMemo(() => {
+    const base = getDrillPlaybackWindow(paths);
+    // Extend window to cover full draw-line traversal for any attached actors
+    let maxEndSec = base.endTimeSec;
+    for (const path of paths) {
+      const attachedLine = drawLines.find((l) => l.attachedActorId === path.actorId);
+      if (attachedLine && attachedLine.points.length >= 2) {
+        const actor = actors.find((a) => a.id === path.actorId);
+        const speedFtPerSec = getEffectiveActorMaxFtPerSec(ageGroup, actor);
+        if (speedFtPerSec > 0) {
+          const lengthFt = attachedLine.totalLengthFt ?? measurePolylineDistanceFeet(attachedLine.points);
+          maxEndSec = Math.max(maxEndSec, lengthFt / speedFtPerSec);
+        }
+      }
+    }
+    return { ...base, endTimeSec: maxEndSec };
+  }, [paths, drawLines, actors, ageGroup]);
   const timelineMaxTime = Math.max(playbackWindow.endTimeSec, 0.1);
   const [actorPieMenuPosition, setActorPieMenuPosition] = useState<{ leftPx: number; topPx: number } | null>(null);
   const [annotationPieMenuPosition, setAnnotationPieMenuPosition] = useState<{ leftPx: number; topPx: number } | null>(null);
@@ -576,13 +592,45 @@ export function RinkHome() {
 
   const bezierSampledPaths = useMemo(
     () => paths.map((path) => {
+      // For actors attached to a draw line, synthesize timed path points from the line geometry
+      const attachedDrawLine = drawLines.find((l) => l.attachedActorId === path.actorId);
+      if (attachedDrawLine && attachedDrawLine.points.length >= 2) {
+        const actor = actors.find((a) => a.id === path.actorId);
+        const speedFtPerSec = getEffectiveActorMaxFtPerSec(ageGroup, actor);
+        if (speedFtPerSec > 0) {
+          // Get dense geometry — bezier-sampled if nodes exist, otherwise raw polyline
+          const dlBezierNodes = syncedBezierNodesByDrawLine[attachedDrawLine.id];
+          let geomPts: Array<{ xFt: number; yFt: number }>;
+          if (dlBezierNodes && dlBezierNodes.length === attachedDrawLine.points.length && dlBezierNodes.length >= 2) {
+            const fakeTimedNodes: TimedPathPoint[] = attachedDrawLine.points.map((p) => ({
+              xFt: p.xFt, yFt: p.yFt, timeSec: 0, action: "carry" as RuntimePathAction,
+            }));
+            geomPts = sampleBezierRouteToTimedPoints(fakeTimedNodes, dlBezierNodes);
+          } else {
+            geomPts = attachedDrawLine.points;
+          }
+          // Assign timeSec from cumulative arc length divided by speed
+          let cumDist = 0;
+          const timedPoints: TimedPathPoint[] = geomPts.map((p, i) => {
+            if (i > 0) {
+              const dx = p.xFt - geomPts[i - 1].xFt;
+              const dy = p.yFt - geomPts[i - 1].yFt;
+              cumDist += Math.sqrt(dx * dx + dy * dy);
+            }
+            return { xFt: p.xFt, yFt: p.yFt, timeSec: cumDist / speedFtPerSec, action: "carry" as RuntimePathAction };
+          });
+          return { ...path, points: timedPoints };
+        }
+      }
+
+      // Normal actor path — apply bezier smoothing if nodes are available
       const bezierNodes = syncedBezierNodesByPath[path.id];
       if (!bezierNodes || bezierNodes.length !== path.points.length || bezierNodes.length < 2) {
         return path;
       }
       return { ...path, points: sampleBezierRouteToTimedPoints(path.points, bezierNodes) };
     }),
-    [paths, syncedBezierNodesByPath],
+    [paths, syncedBezierNodesByPath, drawLines, syncedBezierNodesByDrawLine, actors, ageGroup],
   );
 
   const playbackStates = useMemo(
