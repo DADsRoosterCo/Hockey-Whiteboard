@@ -119,6 +119,7 @@ export function moveRouteBezierHandle(
       cp2Ft: handleType === "cp2Ft" ? { xFt: point.xFt, yFt: point.yFt } : (node.cp2Ft ? { ...node.cp2Ft } : undefined),
     };
 
+
     // For continuous (smooth) nodes, mirror the opposite handle to keep
     // the tangent symmetric around the anchor.
     if (nextNode.nodeType !== "hard") {
@@ -131,4 +132,99 @@ export function moveRouteBezierHandle(
 
     return nextNode;
   });
+}
+
+// ---------------------------------------------------------------------------
+// Arc-length sampling along a bezier route
+// ---------------------------------------------------------------------------
+
+const BEZIER_SAMPLES_PER_SEGMENT = 64;
+
+interface BezierSample {
+  distFt: number;
+  xFt: number;
+  yFt: number;
+}
+
+export interface BezierSampleTable {
+  samples: BezierSample[];
+  totalFt: number;
+}
+
+/**
+ * Build an arc-length lookup table by chord-sampling each cubic bezier
+ * segment. Matches the control-point convention used by buildActorRoutePathData:
+ *   cp1 = prev.cp2Ft (outgoing handle from prev anchor)
+ *   cp2 = curr.cp1Ft (incoming handle to curr anchor)
+ */
+export function buildBezierSampleTable(
+  nodes: SerializedActorRouteBezierNode[],
+): BezierSampleTable {
+  if (nodes.length < 2) {
+    const samples: BezierSample[] = nodes.length === 1
+      ? [{ distFt: 0, xFt: nodes[0].xFt, yFt: nodes[0].yFt }]
+      : [];
+    return { samples, totalFt: 0 };
+  }
+
+  const samples: BezierSample[] = [{ distFt: 0, xFt: nodes[0].xFt, yFt: nodes[0].yFt }];
+  let totalFt = 0;
+
+  for (let i = 1; i < nodes.length; i++) {
+    const prev = nodes[i - 1];
+    const curr = nodes[i];
+    const cp1 = prev.cp2Ft ?? { xFt: prev.xFt, yFt: prev.yFt };
+    const cp2 = curr.cp1Ft ?? { xFt: curr.xFt, yFt: curr.yFt };
+
+    let px = prev.xFt;
+    let py = prev.yFt;
+
+    for (let s = 1; s <= BEZIER_SAMPLES_PER_SEGMENT; s++) {
+      const t = s / BEZIER_SAMPLES_PER_SEGMENT;
+      const mt = 1 - t;
+      const x = mt*mt*mt*prev.xFt + 3*mt*mt*t*cp1.xFt + 3*mt*t*t*cp2.xFt + t*t*t*curr.xFt;
+      const y = mt*mt*mt*prev.yFt + 3*mt*mt*t*cp1.yFt + 3*mt*t*t*cp2.yFt + t*t*t*curr.yFt;
+      totalFt += Math.hypot(x - px, y - py);
+      samples.push({ distFt: totalFt, xFt: x, yFt: y });
+      px = x;
+      py = y;
+    }
+  }
+
+  return { samples, totalFt };
+}
+
+/**
+ * Return the rink position at a given arc-length distance along a pre-built
+ * bezier sample table. Clamps to [0, totalFt].
+ */
+export function sampleBezierAtDistance(
+  table: BezierSampleTable,
+  distFt: number,
+): { xFt: number; yFt: number } {
+  const { samples, totalFt } = table;
+  if (samples.length === 0) return { xFt: 0, yFt: 0 };
+  const clamped = Math.max(0, Math.min(totalFt, distFt));
+
+  let lo = 0;
+  let hi = samples.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (samples[mid].distFt < clamped) lo = mid + 1;
+    else hi = mid;
+  }
+
+  if (lo === 0) return { xFt: samples[0].xFt, yFt: samples[0].yFt };
+  if (lo >= samples.length) return { xFt: samples[samples.length - 1].xFt, yFt: samples[samples.length - 1].yFt };
+
+  const a = samples[lo - 1];
+  const b = samples[lo];
+  const span = b.distFt - a.distFt;
+  if (span <= 0) return { xFt: b.xFt, yFt: b.yFt };
+
+  const alpha = (clamped - a.distFt) / span;
+  return {
+    xFt: a.xFt + alpha * (b.xFt - a.xFt),
+    yFt: a.yFt + alpha * (b.yFt - a.yFt),
+  };
 }

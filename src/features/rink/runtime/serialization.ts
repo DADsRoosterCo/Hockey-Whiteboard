@@ -74,7 +74,7 @@ export interface SerializedDrawLine {
   totalLengthFt?: number
   color?: string
   lineType?: "solid" | "dashed" | "dotted"
-  lineWeight?: "thin" | "medium" | "thick"
+  lineWeight?: "xThin" | "thin" | "medium" | "thick"
   startArrow?: DrawLineArrowType
   endArrow?: DrawLineArrowType
   attachedActorId?: string | null
@@ -432,7 +432,7 @@ function normalizeDrawLines(drawLines: unknown): SerializedDrawLine[] {
         .map((pt) => ({ xFt: Number(pt.xFt), yFt: Number(pt.yFt) })),
       color: readOptionalString(dl.color),
       lineType: dl.lineType === "dashed" || dl.lineType === "dotted" ? dl.lineType : "solid",
-      lineWeight: dl.lineWeight === "thin" || dl.lineWeight === "thick" ? dl.lineWeight : "medium",
+      lineWeight: dl.lineWeight === "xThin" || dl.lineWeight === "thin" || dl.lineWeight === "medium" || dl.lineWeight === "thick" ? dl.lineWeight : "thin",
       startArrow: normalizeDrawArrow(dl.startArrow ?? (dl.arrowheads === "start" || dl.arrowheads === "both" ? "arrow" : undefined), "none"),
       endArrow: normalizeDrawArrow(dl.endArrow ?? (dl.arrowheads === "end" || dl.arrowheads === "both" ? "arrow" : undefined), "arrow"),
       attachedActorId: typeof dl.attachedActorId === "string" ? dl.attachedActorId : null,

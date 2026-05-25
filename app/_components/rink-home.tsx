@@ -34,6 +34,8 @@ import {
   fitRouteBezierNodes,
   moveRouteBezierHandle,
   moveRouteBezierNode,
+  buildBezierSampleTable,
+  sampleBezierAtDistance,
 } from "@/src/features/rink/routeBezier";
 import type { SerializedActorRouteBezierNode } from "@/src/features/rink/runtime/serialization";
 import { sampleBezierRouteToTimedPoints } from "@/src/features/rink/runtime/routeProjection";
@@ -2004,7 +2006,7 @@ export function RinkHome() {
             <defs>
               {Object.entries(ACTOR_COLORS).map(([role, c]) => (
                 <marker key={role} id={`arrow-${role}`} markerWidth="5" markerHeight="4" refX="4.5" refY="2" orient="auto">
-                  <path d="M0,0.5 L4.5,2 L0,3.5" fill="none" stroke={c.stroke} strokeWidth={ROUTE_STROKE_WIDTH.arrow} />
+                  <polygon points="0,0.3 4.5,2 0,3.7" fill={c.stroke} />
                 </marker>
               ))}
               {Object.entries(ACTOR_COLORS).flatMap(([role, c]) => ([
@@ -2017,7 +2019,7 @@ export function RinkHome() {
                 </marker>,
               ]))}
               <marker id="arrow-pass" markerWidth="5" markerHeight="4" refX="4.5" refY="2" orient="auto">
-                <path d="M0,0.5 L4.5,2 L0,3.5" fill="none" stroke="#f59e0b" strokeWidth="0.9" />
+                <polygon points="0,0.3 4.5,2 0,3.7" fill="#f59e0b" />
               </marker>
               {/* draw-line markers are generated per-line with explicit colors (see drawLines.map below) */}
             </defs>
@@ -2034,17 +2036,15 @@ export function RinkHome() {
               const actorColor = attachedActor ? getActorColor(attachedActor, attachedActor.teamRole ?? "neutral") : null;
               const lineColor = isSelected ? "#f59e0b" : actorColor ? actorColor.stroke : (line.color ?? "#1e293b");
               const lineType = line.lineType ?? "solid";
-              const weight = line.lineWeight ?? "medium";
-              const baseStroke = weight === "thin" ? 0.7 : weight === "thick" ? 2.4 : 1.4;
+              const weight = line.lineWeight ?? "thin";
+              const baseStroke = weight === "xThin" ? 0.35 : weight === "thin" ? 0.7 : weight === "thick" ? 2.4 : 1.4;
               const endArrow = line.endArrow ?? "arrow";
               const startArrow = line.startArrow ?? "none";
               const dashArray = lineType === "dashed" ? "5 3" : lineType === "dotted" ? "1.5 3" : undefined;
               const safeId = line.id.replace(/[^a-z0-9]/gi, "-");
               const endMarkerId = endArrow !== "none" ? `dl-${safeId}-end-${endArrow}` : null;
               const startMarkerId = startArrow !== "none" ? `dl-${safeId}-start-${startArrow}` : null;
-              const markerEnd = attachedActor
-                ? `url(#arrow-${attachedActor.teamRole ?? "neutral"})`
-                : (endMarkerId ? `url(#${endMarkerId})` : undefined);
+              const markerEnd = endMarkerId ? `url(#${endMarkerId})` : undefined;
               const markerStart = startMarkerId ? `url(#${startMarkerId})` : undefined;
               const showHandles = isSelected && drawLineMode === "edit";
               return (
@@ -2085,14 +2085,26 @@ export function RinkHome() {
                   {attachedActor && !(isSelected && drawLineMode === "edit") && (() => {
                     const speedFtPerSec = getEffectiveActorMaxFtPerSec(ageGroup, attachedActor);
                     if (!speedFtPerSec || speedFtPerSec <= 0) return null;
-                    const totalLen = line.totalLengthFt ?? measurePolylineDistanceFeet(line.points);
                     const tickFill = actorColor?.stroke ?? "#888";
                     const ticks: React.ReactNode[] = [];
-                    for (let t = 2; t * speedFtPerSec < totalLen; t += 2) {
-                      const pos = samplePointAlongPolyline(line.points, t * speedFtPerSec);
-                      ticks.push(
-                        <circle key={`tick-${t}`} cx={pos.xFt} cy={pos.yFt} r={1.8} fill={tickFill} opacity={0.7} pointerEvents="none" />,
-                      );
+                    if (dlBezierNodes && dlBezierNodes.length >= 2) {
+                      // Sample along the actual bezier curve so dots sit on the visible arc.
+                      const table = buildBezierSampleTable(dlBezierNodes);
+                      for (let t = 2; t * speedFtPerSec < table.totalFt; t += 2) {
+                        const pos = sampleBezierAtDistance(table, t * speedFtPerSec);
+                        ticks.push(
+                          <circle key={`tick-${t}`} cx={pos.xFt} cy={pos.yFt} r={1.8} fill={tickFill} opacity={0.7} pointerEvents="none" />,
+                        );
+                      }
+                    } else {
+                      // Fallback: straight polyline (no bezier nodes present).
+                      const totalLen = line.totalLengthFt ?? measurePolylineDistanceFeet(line.points);
+                      for (let t = 2; t * speedFtPerSec < totalLen; t += 2) {
+                        const pos = samplePointAlongPolyline(line.points, t * speedFtPerSec);
+                        ticks.push(
+                          <circle key={`tick-${t}`} cx={pos.xFt} cy={pos.yFt} r={1.8} fill={tickFill} opacity={0.7} pointerEvents="none" />,
+                        );
+                      }
                     }
                     return ticks.length > 0 ? <g>{ticks}</g> : null;
                   })()}
@@ -2778,7 +2790,7 @@ export function RinkHome() {
             const dlStartArrow: DrawLineArrowType = selectedDrawLine.startArrow ?? "none";
             const dlEndArrow: DrawLineArrowType = selectedDrawLine.endArrow ?? "arrow";
             const dlColor = selectedDrawLine.color ?? "#1e293b";
-            const dlWeight = selectedDrawLine.lineWeight ?? "medium";
+            const dlWeight = selectedDrawLine.lineWeight ?? "thin";
             const dlAttachedActor = selectedDrawLine.attachedActorId != null
               ? actors.find((a) => a.id === selectedDrawLine.attachedActorId) ?? null
               : null;
@@ -2992,6 +3004,7 @@ export function RinkHome() {
                   label: "WEIGHT",
                   icon: weightIcon,
                   subItems: [
+                    { id: "dl-weight-xthin",  label: "X-THIN", active: dlWeight === "xThin",  action: () => updateDrawLineProps(selectedDrawLineId, { lineWeight: "xThin" }),  keepOpen: true },
                     { id: "dl-weight-thin",   label: "THIN",   active: dlWeight === "thin",   action: () => updateDrawLineProps(selectedDrawLineId, { lineWeight: "thin" }),   keepOpen: true },
                     { id: "dl-weight-medium", label: "MEDIUM", active: dlWeight === "medium", action: () => updateDrawLineProps(selectedDrawLineId, { lineWeight: "medium" }), keepOpen: true },
                     { id: "dl-weight-thick",  label: "THICK",  active: dlWeight === "thick",  action: () => updateDrawLineProps(selectedDrawLineId, { lineWeight: "thick" }),  keepOpen: true },
@@ -3235,7 +3248,7 @@ function getActorEditorState(actor?: SerializedActor | null): ActorEditorState {
 
   return {
     positionTag: typeof metadata.positionTag === "string" ? metadata.positionTag : "F",
-    speedTier: typeof metadata.speedTier === "number" ? clamp(Math.round(metadata.speedTier), 0, SPEED_OPTIONS.length - 1) : 4,
+    speedTier: typeof metadata.speedTier === "number" ? clamp(Math.round(metadata.speedTier), 0, SPEED_OPTIONS.length - 1) : 6,
     hasPuck: metadata.hasPuck === true,
     skateBackward: metadata.skateBackward === true,
     skateLateral: metadata.skateLateral === true,
