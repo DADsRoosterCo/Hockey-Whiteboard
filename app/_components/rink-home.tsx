@@ -73,6 +73,8 @@ type DragState =
       actorId: string;
       pointerStart: { xFt: number; yFt: number };
       originPoints: Array<{ xFt: number; yFt: number }>;
+      attachedDrawLineId?: string;
+      drawLineOriginPoints?: Array<{ xFt: number; yFt: number }>;
     }
   | {
       kind: "draw-line-translate";
@@ -1011,20 +1013,10 @@ export function RinkHome() {
     setPieMenuOpen(true);
   }
 
-  function _attachPlayerToDrawLine(drawLineId: string, actorId: string) {
+  function attachPlayerToDrawLine(drawLineId: string, actorId: string) {
     const drawLine = drawLines.find((l) => l.id === drawLineId);
     if (!drawLine || drawLine.points.length < 2) return;
-    const actor = actors.find((a) => a.id === actorId);
-    const maxFtPerSec = getEffectiveActorMaxFtPerSec(ageGroup, actor);
-    const fittedPoints = fitFreehandCurveAnchors(drawLine.points);
-    if (fittedPoints.length < 2) return;
-    const startPoint: TimedPathPoint = {
-      xFt: fittedPoints[0].xFt,
-      yFt: fittedPoints[0].yFt,
-      timeSec: 0,
-      action: "carry" as RuntimePathAction,
-    };
-    const newPoints = fitPathPointsToLine([startPoint], fittedPoints.slice(1), "carry", maxFtPerSec);
+    const startPt = drawLine.points[0];
     updateWithHistory((current) => ({
       ...current,
       drawLines: current.drawLines.map((l) =>
@@ -1032,7 +1024,10 @@ export function RinkHome() {
       ),
       paths: current.paths.map((path) => {
         if (path.actorId !== actorId) return path;
-        return { ...path, points: newPoints };
+        return {
+          ...path,
+          points: [{ xFt: startPt.xFt, yFt: startPt.yFt, timeSec: 0, action: "carry" as RuntimePathAction }],
+        };
       }),
       activeActorId: actorId,
       selectedDrawLineId: null,
@@ -1470,7 +1465,7 @@ export function RinkHome() {
       pointerId: event.pointerId,
       pointerStart: pointerPoint,
       draftStart: { xFt: draftStart.xFt, yFt: draftStart.yFt },
-      routeMode: event.shiftKey || routeGestureMode === "move-route" ? "move-route" : "extend",
+      routeMode: drawLines.some((l) => l.attachedActorId === actorId) || event.shiftKey || routeGestureMode === "move-route" ? "move-route" : "extend",
     };
   }
 
@@ -1673,11 +1668,15 @@ export function RinkHome() {
         }
 
         if (pendingGesture.routeMode === "move-route") {
+          const attachedDrawLine = drawLines.find((l) => l.attachedActorId === pendingGesture.actorId) ?? null;
+          const drawLineOriginPoints = attachedDrawLine?.points.map((p) => ({ xFt: p.xFt, yFt: p.yFt }));
           setDragState({
             kind: "route-translate",
             actorId: pendingGesture.actorId,
             pointerStart: pendingGesture.pointerStart,
             originPoints: actorPath.points.map((pathPoint) => ({ xFt: pathPoint.xFt, yFt: pathPoint.yFt })),
+            attachedDrawLineId: attachedDrawLine?.id ?? undefined,
+            drawLineOriginPoints,
           });
           overlaySvgRef.current?.setPointerCapture(event.pointerId);
           translateActorPath(
@@ -1686,6 +1685,9 @@ export function RinkHome() {
             actorPath.points.map((pathPoint) => ({ xFt: pathPoint.xFt, yFt: pathPoint.yFt })),
             point,
           );
+          if (attachedDrawLine && drawLineOriginPoints) {
+            translateDrawLineLive(attachedDrawLine.id, pendingGesture.pointerStart, drawLineOriginPoints, point);
+          }
         } else {
           // Player route drawing is disabled
         }
@@ -1726,6 +1728,9 @@ export function RinkHome() {
       updatePathPointPosition(dragState.actorId, dragState.pointIndex, point);
     } else if (dragState.kind === "route-translate") {
       translateActorPath(dragState.actorId, dragState.pointerStart, dragState.originPoints, point);
+      if (dragState.attachedDrawLineId && dragState.drawLineOriginPoints) {
+        translateDrawLineLive(dragState.attachedDrawLineId, dragState.pointerStart, dragState.drawLineOriginPoints, point);
+      }
     } else if (dragState.kind === "draw-line-translate") {
       translateDrawLineLive(dragState.drawLineId, dragState.pointerStart, dragState.originPoints, point);
     } else if (dragState.kind === "draw-line-point") {
@@ -1971,13 +1976,15 @@ export function RinkHome() {
 
             {/* Draw lines */}
             {drawLines.map((line) => {
-              if (line.attachedActorId != null || line.points.length < 2) return null;
+              if (line.points.length < 2) return null;
+              const attachedActor = line.attachedActorId != null ? actors.find((a) => a.id === line.attachedActorId) ?? null : null;
               const isSelected = line.id === selectedDrawLineId;
               const dlBezierNodes = syncedBezierNodesByDrawLine[line.id];
               const pathD = dlBezierNodes
                 ? buildActorRoutePathData(line.points, dlBezierNodes, true)
                 : buildOverlayPathData(line.points, true, 0.65);
-              const lineColor = isSelected ? "#f59e0b" : (line.color ?? "#1e293b");
+              const actorColor = attachedActor ? getActorColor(attachedActor, attachedActor.teamRole ?? "neutral") : null;
+              const lineColor = isSelected ? "#f59e0b" : actorColor ? actorColor.stroke : (line.color ?? "#1e293b");
               const lineType = line.lineType ?? "solid";
               const weight = line.lineWeight ?? "medium";
               const baseStroke = weight === "thin" ? 0.7 : weight === "thick" ? 2.4 : 1.4;
@@ -1987,7 +1994,9 @@ export function RinkHome() {
               const safeId = line.id.replace(/[^a-z0-9]/gi, "-");
               const endMarkerId = endArrow !== "none" ? `dl-${safeId}-end-${endArrow}` : null;
               const startMarkerId = startArrow !== "none" ? `dl-${safeId}-start-${startArrow}` : null;
-              const markerEnd = endMarkerId ? `url(#${endMarkerId})` : undefined;
+              const markerEnd = attachedActor
+                ? `url(#arrow-${attachedActor.teamRole ?? "neutral"})`
+                : (endMarkerId ? `url(#${endMarkerId})` : undefined);
               const markerStart = startMarkerId ? `url(#${startMarkerId})` : undefined;
               const showHandles = isSelected && drawLineMode === "edit";
               return (
@@ -2024,6 +2033,21 @@ export function RinkHome() {
                     markerStart={markerStart}
                     pointerEvents="none"
                   />
+                  {/* Timing ticks — 2-second interval marks, hidden while editing bezier handles */}
+                  {attachedActor && !(isSelected && drawLineMode === "edit") && (() => {
+                    const speedFtPerSec = getEffectiveActorMaxFtPerSec(ageGroup, attachedActor);
+                    if (!speedFtPerSec || speedFtPerSec <= 0) return null;
+                    const totalLen = line.totalLengthFt ?? measurePolylineDistanceFeet(line.points);
+                    const tickFill = actorColor?.stroke ?? "#888";
+                    const ticks: React.ReactNode[] = [];
+                    for (let t = 2; t * speedFtPerSec < totalLen; t += 2) {
+                      const pos = samplePointAlongPolyline(line.points, t * speedFtPerSec);
+                      ticks.push(
+                        <circle key={`tick-${t}`} cx={pos.xFt} cy={pos.yFt} r={1.8} fill={tickFill} opacity={0.7} pointerEvents="none" />,
+                      );
+                    }
+                    return ticks.length > 0 ? <g>{ticks}</g> : null;
+                  })()}
                   {/* Bezier node + handle editor */}
                   {showHandles && dlBezierNodes && (() => {
                     const nodeStroke = "#1e293b";
@@ -2139,7 +2163,7 @@ export function RinkHome() {
 
               return (
                 <g key={path.id}>
-                  {path.points.length > 1 && renderRouteLineVisual({
+                  {!isDrawLineAttached && path.points.length > 1 && renderRouteLineVisual({
                     lineType: routeLineType,
                     pathData,
                     sampledPoints,
@@ -2702,6 +2726,9 @@ export function RinkHome() {
             const dlEndArrow: DrawLineArrowType = selectedDrawLine.endArrow ?? "arrow";
             const dlColor = selectedDrawLine.color ?? "#1e293b";
             const dlWeight = selectedDrawLine.lineWeight ?? "medium";
+            const dlAttachedActor = selectedDrawLine.attachedActorId != null
+              ? actors.find((a) => a.id === selectedDrawLine.attachedActorId) ?? null
+              : null;
 
             // Icons (white SVG, same style as actor menu)
             const startArrowIcon = (
@@ -2931,6 +2958,37 @@ export function RinkHome() {
                   action: () => { setDrawLineMode("edit"); setPieMenuOpen(false); },
                   keepOpen: true,
                 },
+                ...(dlAttachedActor
+                  ? [{
+                      id: "dl-detach",
+                      label: "DETACH",
+                      icon: (
+                        <g stroke="currentColor" strokeWidth={2} strokeLinecap="round" fill="none">
+                          <circle cx={0} cy={0} r={5} />
+                          <line x1={-3} y1={-3} x2={3} y2={3} />
+                        </g>
+                      ),
+                      action: () => detachPlayerFromDrawLine(selectedDrawLineId),
+                    }]
+                  : actors.length > 0
+                    ? [{
+                        id: "dl-attach",
+                        label: "ATTACH",
+                        icon: (
+                          <g stroke="currentColor" strokeWidth={2} strokeLinecap="round" fill="none">
+                            <circle cx={0} cy={0} r={5} />
+                            <line x1={-3} y1={0} x2={3} y2={0} />
+                            <line x1={0} y1={-3} x2={0} y2={3} />
+                          </g>
+                        ),
+                        subItems: actors.map((actor) => ({
+                          id: `dl-attach-${actor.id}`,
+                          label: getActorTokenLabel(actor, actor.id),
+                          action: () => attachPlayerToDrawLine(selectedDrawLineId, actor.id),
+                        })),
+                      }]
+                    : []
+                ),
                 {
                   id: "dl-delete",
                   label: "DELETE",
