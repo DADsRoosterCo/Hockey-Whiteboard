@@ -67,9 +67,10 @@ export function resolveSpeedFtPerSec(
   ageGroup: string,
   speedTier: number,
 ): number {
-  // speedTier 0 = pause (0 ft/s), 1-6 map to speedModifier -0.8 → 1.0
+  // speedTier 0 = pause (0 ft/s), 1-6 map to glide/slow/cruise/fast/sprint/top-speed
+  // Modifier values must match getActorSpeedModifier() in rink-home.tsx.
   if (speedTier === 0) return 0;
-  const modifiers = [-0.6, -0.3, 0.0, 0.3, 0.6, 1.0];
+  const modifiers = [-1, -0.5, 0, 0.5, 0.75, 1];
   const modifier = modifiers[Math.min(speedTier - 1, modifiers.length - 1)];
   return getSkatingFtPerSec(ageGroup, modifier) ?? 10; // 10 ft/s fallback
 }

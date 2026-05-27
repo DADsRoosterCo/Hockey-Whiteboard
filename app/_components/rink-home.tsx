@@ -21,7 +21,7 @@ import {
   type SerializedDrawLine,
   type DrawLineArrowType,
 } from "@/src/features/rink/runtime/serialization";
-import { getSkatingFtPerSec } from "@/src/features/rink/runtime/motionProfiles";
+import { getSkatingFtPerSec, getSpeedMph } from "@/src/features/rink/runtime/motionProfiles";
 import {
   getDrillPlaybackStates,
   getDrillPlaybackWindow,
@@ -156,6 +156,12 @@ type RouteLegendItem = {
 
 const INITIAL_ACTORS: SerializedActor[] = [];
 
+// Goal line positions match hockeyCanadaRinkSpec (11 ft from each end board, centre y = 42.5 ft)
+const INITIAL_ANNOTATIONS: SerializedAnnotation[] = [
+  { id: "default-net-left",  type: "net", xFt: 11,  yFt: 42.5, teamRole: "neutral", rotationDeg: 0   },
+  { id: "default-net-right", type: "net", xFt: 189, yFt: 42.5, teamRole: "neutral", rotationDeg: 180 },
+];
+
 function createDefaultAnchorPoint(
   teamRole: SerializedActor["teamRole"],
   slotIndex = 0,
@@ -259,15 +265,6 @@ const _TEAM_BUTTONS: Array<{ label: string; value: SerializedActor["teamRole"] }
   { label: "N", value: "neutral" },
 ];
 
-const DRILL_CATEGORIES = [
-  "PENALTY KILL STRUCTURE",
-  "FACEOFF EXECUTION",
-  "REGROUP FREERIDE",
-  "BEAT COVERAGE",
-  "SOFT CONTROL AS A UNIT",
-  "SIDE AREA WALL BACK",
-];
-
 const _ACTION_OPTIONS: Array<{ label: string; value: RuntimePathAction }> = [
   { label: "Carry", value: "carry" },
   { label: "Pass", value: "pass" },
@@ -315,7 +312,7 @@ export function RinkHome() {
   const [curveIntensity, setCurveIntensity] = useState(0.65);
   const [selectedPoint, setSelectedPoint] = useState<SelectedPoint | null>(null);
   const [actors, setActors] = useState(INITIAL_ACTORS);
-  const [annotations, setAnnotations] = useState<SerializedAnnotation[]>([]);
+  const [annotations, setAnnotations] = useState<SerializedAnnotation[]>(() => INITIAL_ANNOTATIONS.map((a) => ({ ...a })));
   const [paths, setPaths] = useState(INITIAL_PATHS);
   const [activeActorId, setActiveActorId] = useState<string | null>(INITIAL_ACTORS[0]?.id ?? null);
   const [selectedRouteActorId, setSelectedRouteActorId] = useState<string | null>(INITIAL_ACTORS[0]?.id ?? null);
@@ -1066,7 +1063,17 @@ export function RinkHome() {
   function attachPlayerToDrawLine(drawLineId: string, actorId: string) {
     const drawLine = drawLines.find((l) => l.id === drawLineId);
     if (!drawLine || drawLine.points.length < 2) return;
-    const startPt = drawLine.points[0];
+    const actor = actors.find((a) => a.id === actorId);
+    const maxFtPerSec = getEffectiveActorMaxFtPerSec(ageGroup, actor);
+    const startPoint: TimedPathPoint = {
+      xFt: drawLine.points[0].xFt,
+      yFt: drawLine.points[0].yFt,
+      timeSec: 0,
+      action: "carry" as RuntimePathAction,
+    };
+    const newPoints = fitPathPointsToLine([startPoint], drawLine.points.slice(1), "carry", maxFtPerSec);
+    const dlBezierNodes = syncedBezierNodesByDrawLine[drawLineId];
+    const actorPath = paths.find((p) => p.actorId === actorId);
     updateWithHistory((current) => ({
       ...current,
       drawLines: current.drawLines.map((l) =>
@@ -1074,14 +1081,64 @@ export function RinkHome() {
       ),
       paths: current.paths.map((path) => {
         if (path.actorId !== actorId) return path;
-        return {
-          ...path,
-          points: [{ xFt: startPt.xFt, yFt: startPt.yFt, timeSec: 0, action: "carry" as RuntimePathAction }],
-        };
+        return { ...path, points: newPoints };
       }),
       activeActorId: actorId,
       selectedDrawLineId: null,
     }));
+    // Copy draw-line bezier nodes to actor path so curve shape is preserved after detach
+    if (dlBezierNodes && actorPath && dlBezierNodes.length === newPoints.length) {
+      setBezierNodesByPath((current) => ({ ...current, [actorPath.id]: dlBezierNodes }));
+    }
+    setPieMenuOpen(false);
+  }
+
+  function createAndAttachPlayerToDrawLine(slot: string, drawLineId: string) {
+    const drawLine = drawLines.find((l) => l.id === drawLineId);
+    if (!drawLine || drawLine.points.length < 2) return;
+
+    const actorId = `home-actor-${nextActorIdRef.current++}`;
+    const actor: SerializedActor = {
+      id: actorId,
+      name: slot,
+      teamRole: "home",
+      metadata: { positionTag: slot },
+    };
+
+    const maxFtPerSec = getEffectiveActorMaxFtPerSec(ageGroup, actor);
+    const startPoint: TimedPathPoint = {
+      xFt: drawLine.points[0].xFt,
+      yFt: drawLine.points[0].yFt,
+      timeSec: 0,
+      action: "carry" as RuntimePathAction,
+    };
+    const fittedPoints = fitPathPointsToLine([startPoint], drawLine.points.slice(1), "carry", maxFtPerSec);
+    const dlBezierNodes = syncedBezierNodesByDrawLine[drawLineId];
+
+    const newPath: SerializedPath = {
+      id: `${actorId}-path`,
+      actorId,
+      label: `${slot} Path`,
+      teamRole: "home",
+      points: fittedPoints,
+    };
+
+    updateWithHistory((current) => ({
+      ...current,
+      actors: [...current.actors, actor],
+      paths: [...current.paths, newPath],
+      drawLines: current.drawLines.map((l) =>
+        l.id === drawLineId ? { ...l, attachedActorId: actorId } : l,
+      ),
+      activeActorId: actorId,
+      selectedDrawLineId: null,
+      curveModeByActor: { ...current.curveModeByActor, [actorId]: true },
+    }));
+
+    if (dlBezierNodes && dlBezierNodes.length === fittedPoints.length) {
+      setBezierNodesByPath((current) => ({ ...current, [newPath.id]: dlBezierNodes }));
+    }
+
     setPieMenuOpen(false);
   }
 
@@ -1260,7 +1317,7 @@ export function RinkHome() {
     const freshActors = INITIAL_ACTORS.map((a) => ({ ...a }));
     updateWithHistory(() => ({
       actors: freshActors,
-      annotations: [],
+      annotations: INITIAL_ANNOTATIONS.map((a) => ({ ...a })),
       paths: freshActors.map((a, index) => createDefaultPathForActor(a, index)),
       drawLines: [],
       activeActorId: freshActors[0].id,
@@ -1475,11 +1532,8 @@ export function RinkHome() {
     const point = getRinkPointFromPointer(event.clientX, event.clientY);
     if (!point) return;
 
-    let actorIdForDraft: string | null;
-    let initialPoints: Array<{ xFt: number; yFt: number }>;
-
-    actorIdForDraft = null;
-    initialPoints = [point];
+    const actorIdForDraft: string | null = null;
+    const initialPoints: Array<{ xFt: number; yFt: number }> = [point];
 
     dragMovedRef.current = false;
     setSelectedAnnotationId(null);
@@ -1906,36 +1960,12 @@ export function RinkHome() {
   return (
     <div className="wb-shell">
 
-      {/* ── Drill header ── */}
-      <div className="wb-drill-header">
-        <a href="#" className="wb-back-link">← DRILL LIBRARY</a>
-        <div className="wb-category-strip">
-          {DRILL_CATEGORIES.map((cat) => (
-            <span key={cat} className="wb-category-chip">{cat}</span>
-          ))}
-        </div>
-        <div className="wb-view-toggle-group">
-          <button type="button" className="wb-view-btn">PLAYER VIEW</button>
-          <button type="button" className="wb-view-btn wb-view-btn--active">COACH EDIT</button>
-        </div>
-      </div>
-
       {/* ── Save row ── */}
-      <div className="wb-save-row">
-        <button type="button" onClick={downloadCurrentJson} className="wb-btn--save">SAVE</button>
-      </div>
-
       {/* ── Main panel ── */}
       <div className="wb-main-panel">
 
         {/* Toolbar */}
         <div className="wb-toolbar-row">
-          <div className="wb-toolbar-left">
-            <select defaultValue="nhl-full-ice" className="wb-select wb-select--auto" aria-label="Rink preset">
-              <option value="nhl-full-ice">NHL Full Ice</option>
-            </select>
-          </div>
-
           <div className="wb-toolbar-center">
             {EDITOR_TOOL_ITEMS.map((item) => (
               <button
@@ -1959,6 +1989,9 @@ export function RinkHome() {
             </button>
             <button type="button" onClick={redoLastChange} disabled={!canRedo} className="wb-tool-btn">
               <span className="wb-tool-icon">⟲</span> REDO
+            </button>
+            <button type="button" onClick={downloadCurrentJson} className="wb-tool-btn">
+              <span className="wb-tool-icon">✓</span> SAVE
             </button>
             <button type="button" onClick={downloadCurrentJson} className="wb-tool-btn wb-tool-btn--png">
               <span className="wb-tool-icon">↓</span> PNG
@@ -2509,17 +2542,6 @@ export function RinkHome() {
                 <ellipse cx="0" cy="2" rx="5" ry="2" fill="rgba(0, 0, 0, 0.25)" />
               </g>
             );
-            const pathIcon = (
-              <g transform="translate(0,0) scale(0.3168)" style={{ fill: "#ffffff", stroke: "none" }}>
-                {/* Approximated S made from overlapping rounded rects (solid fill) */}
-                <rect x="-14" y="-10" width="26" height="7" rx="3.5" transform="rotate(-18)" style={{ fill: "#ffffff", stroke: "none" }} />
-                <rect x="-10" y="-2.5" width="22" height="7" rx="3.5" transform="rotate(14)" style={{ fill: "#ffffff", stroke: "none" }} />
-                <rect x="-14" y="6" width="26" height="7" rx="3.5" transform="rotate(-18)" style={{ fill: "#ffffff", stroke: "none" }} />
-                {/* Connector + larger arrowhead attached to the end of the S */}
-                <rect x="20" y="1" width="8" height="6" rx="1" style={{ fill: "#ffffff", stroke: "none" }} />
-                <polygon style={{ fill: "#ffffff", stroke: "none" }} points="30,4 40,0 30,-4" />
-              </g>
-            );
             const moveIcon = (
               <g style={{ color: "#ffffff" }}>
                 <rect x="-8" y="-1" width="16" height="2" fill="currentColor" />
@@ -2720,6 +2742,29 @@ export function RinkHome() {
                   label: String(stage),
                   action: () => setPathStartStage(activeActorId, stage),
                 })),
+              },
+              {
+                id: "age",
+                label: "AGE",
+                icon: (
+                  <g fill="currentColor">
+                    <circle cx="0" cy="-4" r="3.2" />
+                    <path d="M-5,5 C-5,-0.5 -2.5,-1.5 0,-1.5 C2.5,-1.5 5,-0.5 5,5 Z" />
+                  </g>
+                ),
+                active: false,
+                subItems: AGE_GROUP_OPTIONS.map((ag) => {
+                  const mph = getSpeedMph("skating", ag, 1.0);
+                  const mphStr = mph !== null ? `${Math.round(mph)}` : "";
+                  return {
+                    id: `age-${ag}`,
+                    label: ag,
+                    icon: mphStr,
+                    active: ageGroup === ag,
+                    action: () => { setAgeGroup(ag); },
+                    keepOpen: true,
+                  } as PieMenuItem;
+                }),
               },
               {
                 id: "delete",
@@ -3036,8 +3081,7 @@ export function RinkHome() {
                       ),
                       action: () => detachPlayerFromDrawLine(selectedDrawLineId),
                     }]
-                  : actors.length > 0
-                    ? [{
+                  : [{
                         id: "dl-attach",
                         label: "ATTACH",
                         icon: (
@@ -3047,13 +3091,22 @@ export function RinkHome() {
                             <line x1={0} y1={-3} x2={0} y2={3} />
                           </g>
                         ),
-                        subItems: actors.map((actor) => ({
-                          id: `dl-attach-${actor.id}`,
-                          label: getActorTokenLabel(actor, actor.id),
-                          action: () => attachPlayerToDrawLine(selectedDrawLineId, actor.id),
-                        })),
+                        subItems: ATTACH_POSITION_SLOTS.map((slot) => {
+                          const existingHome = findActorForSlot(slot, "home", actors);
+                          return {
+                            id: `dl-attach-${slot}`,
+                            label: slot,
+                            active: existingHome != null && selectedDrawLine.attachedActorId === existingHome.id,
+                            action: () => {
+                              if (existingHome) {
+                                attachPlayerToDrawLine(selectedDrawLineId, existingHome.id);
+                              } else {
+                                createAndAttachPlayerToDrawLine(slot, selectedDrawLineId);
+                              }
+                            },
+                          };
+                        }),
                       }]
-                    : []
                 ),
                 {
                   id: "dl-delete",
@@ -3143,8 +3196,8 @@ export function RinkHome() {
                     aria-label={`Focus ${actor?.name ?? path.actorId} path`}
                   >
                     <svg viewBox="0 0 100 24" preserveAspectRatio="none">
-                      {Array.from({ length: 6 }, (_, i) => {
-                        const x = ((i + 1) / 6) * 100;
+                      {Array.from({ length: Math.floor(timelineMaxTime / 2) }, (_, i) => {
+                        const x = ((i + 1) * 2 / timelineMaxTime) * 100;
                         return <line key={i} x1={x} y1="0" x2={x} y2="24" stroke="rgba(71,85,105,0.4)" strokeWidth="0.4" />;
                       })}
                       {path.points.length > 0 && (
@@ -3159,8 +3212,10 @@ export function RinkHome() {
                         strokeWidth="0.8"
                       />
                     </svg>
-                    {path.points.map((point, i) => {
-                      const px = ((point.timeSec ?? i) / timelineMaxTime) * 100;
+                    {Array.from({ length: Math.floor((endTime - startTime) / 2) + 1 }, (_, i) => {
+                      const t = startTime + i * 2;
+                      if (t > endTime + 0.1) return null;
+                      const px = (t / timelineMaxTime) * 100;
                       return (
                         <span
                           key={i}
@@ -3176,28 +3231,6 @@ export function RinkHome() {
               );
             })}
           </div>
-        </div>
-      </div>
-
-      {/* ── Roster bar ── */}
-      <div className="wb-roster-bar">
-        <button type="button" onClick={() => addActor("home")} className="wb-btn wb-btn--ghost wb-btn--home">+ Home</button>
-        <button type="button" onClick={() => addActor("away")} className="wb-btn wb-btn--ghost wb-btn--away">+ Away</button>
-        <button type="button" onClick={() => addActor("neutral")} className="wb-btn wb-btn--ghost">+ Neutral</button>
-        <button type="button" onClick={resetActivePath} className="wb-btn wb-btn--ghost">Clear Path</button>
-        <button type="button" onClick={resetDrill} className="wb-btn wb-btn--danger">Reset</button>
-        <div className="wb-roster-right">
-          <select value={ageGroup} onChange={(e) => setAgeGroup(e.target.value)} className="wb-select wb-select--auto" title="Age group for this drill">
-            {AGE_GROUP_OPTIONS.map((g) => <option key={g} value={g}>{g}</option>)}
-          </select>
-          <label className="wb-roster-option">
-            <input type="checkbox" checked={showZones} onChange={(e) => setShowZones(e.target.checked)} />
-            Zones
-          </label>
-          <label className="wb-roster-option">
-            <input type="checkbox" checked={showCurvedPaths} onChange={(e) => setShowCurvedPaths(e.target.checked)} />
-            Curves
-          </label>
         </div>
       </div>
 
@@ -3241,6 +3274,20 @@ function getNextPositionLabelForTeam(teamRole: SerializedActor["teamRole"], curr
 
   const number = (counts[posToUse] ?? 0) + 1;
   return { label: `${posToUse}${number}`, positionTag: posToUse };
+}
+
+const ATTACH_POSITION_SLOTS = ["F1", "F2", "F3", "C", "WR", "WL", "D1", "D2"] as const;
+
+function findActorForSlot(
+  slot: string,
+  teamRole: SerializedActor["teamRole"],
+  allActors: SerializedActor[],
+): SerializedActor | undefined {
+  return allActors.find(
+    (a) =>
+      getActorTokenLabel(a, a.id) === slot &&
+      (a.teamRole ?? "neutral") === (teamRole ?? "neutral"),
+  );
 }
 
 function getActorEditorState(actor?: SerializedActor | null): ActorEditorState {
@@ -4354,13 +4401,42 @@ function AnnotationOverlayItem(
           />
         </g>
       );
-    case "net":
+    case "net": {
+      // Canonical orientation: mouth opens toward +X (right).
+      // Anchor = centre of mouth opening (on the goal line).
+      // Body extends to -X: posts at (0, ±3), back corners at (-2.93, ±3),
+      // back wall at x = -3.33, corner radius 0.4 ft.
+      // rotationDeg=0 → left net (mouth faces centre ice); 180 → right net.
+      const rot = annotation.rotationDeg ?? 0;
       return (
-        <g data-annotation-handle="true" className="cursor-grab" onPointerDown={onPointerDown} onClick={stopAnnotationClick}>
-          <rect x={annotation.xFt - 3} y={annotation.yFt - 1.7} width={6} height={3.4} rx={0.6} fill="rgba(255,255,255,0.04)" stroke={colors.stroke} strokeWidth={sw} />
-          <path d={`M ${annotation.xFt - 2.6} ${annotation.yFt + 1.4} L ${annotation.xFt} ${annotation.yFt - 0.2} L ${annotation.xFt + 2.6} ${annotation.yFt + 1.4}`} fill="none" stroke={colors.stroke} strokeWidth={0.7} />
+        <g
+          data-annotation-handle="true"
+          className="cursor-grab"
+          onPointerDown={onPointerDown}
+          onClick={stopAnnotationClick}
+          transform={`translate(${annotation.xFt}, ${annotation.yFt}) rotate(${rot})`}
+        >
+          {/* Net interior fill */}
+          <path
+            d="M 0,-3 L -1.83,-3 A 1.5,1.5 0 0 0 -3.33,-1.5 L -3.33,1.5 A 1.5,1.5 0 0 0 -1.83,3 L 0,3 Z"
+            fill="rgba(239,68,68,0.08)"
+            stroke="none"
+          />
+          {/* Side + back frame */}
+          <path
+            d="M 0,-3 L -1.83,-3 A 1.5,1.5 0 0 0 -3.33,-1.5 L -3.33,1.5 A 1.5,1.5 0 0 0 -1.83,3 L 0,3"
+            fill="none"
+            stroke="#ef4444"
+            strokeWidth={0.25}
+            strokeLinecap="round"
+          />
+          {/* Front face: posts + crossbar (thicker) */}
+          <line x1="0" y1="-3" x2="0" y2="3" stroke="#ef4444" strokeWidth={0.5} strokeLinecap="round" />
+          {/* Centre pipe */}
+          <line x1="0" y1="0" x2="-3.33" y2="0" stroke="#ef4444" strokeWidth={0.2} strokeOpacity={0.5} />
         </g>
       );
+    }
     case "puck":
       return (
         <g data-annotation-handle="true" className="cursor-grab" onPointerDown={onPointerDown} onClick={stopAnnotationClick}>
