@@ -24,6 +24,7 @@ interface PieMenuProps {
   items: PieMenuItem[];
   centerLabel: string;
   onClose: () => void;
+  variant?: "default" | "blue";
 }
 
 const CX = 90;
@@ -74,7 +75,7 @@ function labelArcPath(startDeg: number, endDeg: number, radius: number): string 
   return `M${x1.toFixed(2)},${y1.toFixed(2)}A${radius},${radius},0,${large},1,${x2.toFixed(2)},${y2.toFixed(2)}`;
 }
 
-export function PieMenu({ leftPx, topPx, items, centerLabel, onClose }: PieMenuProps) {
+export function PieMenu({ leftPx, topPx, items, centerLabel, onClose, variant = "default" }: PieMenuProps) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [activePrimaryId, setActivePrimaryId] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -194,7 +195,7 @@ export function PieMenu({ leftPx, topPx, items, centerLabel, onClose }: PieMenuP
   return (
     <div
       ref={containerRef}
-      className="wb-pie-menu"
+      className={`wb-pie-menu${variant === "blue" ? " wb-pie-menu--blue" : ""}`}
       style={{ left: `${leftPx}px`, top: `${topPx}px` } as React.CSSProperties}
     >
       <svg
@@ -368,6 +369,20 @@ export function PieMenu({ leftPx, topPx, items, centerLabel, onClose }: PieMenuP
             </g>
           );
         })}
+
+        {/* Center hub */}
+        <g>
+          <circle cx={CX} cy={CY} r={INNER_R} className="wb-pie-center" />
+          <text
+            x={CX}
+            y={CY}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            className="wb-pie-center-label"
+          >
+            {centerLabel}
+          </text>
+        </g>
 
       </svg>
     </div>

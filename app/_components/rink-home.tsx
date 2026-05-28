@@ -435,6 +435,7 @@ export function RinkHome() {
     leftPx: number;
     topPx: number;
   } | null>(null);
+  const [selectedFrameNum, setSelectedFrameNum] = useState<number | null>(null);
 
   const getMenuPositionFromPoint = useCallback((point: { xFt: number; yFt: number }) => {
     const svg = overlaySvgRef.current;
@@ -644,6 +645,11 @@ export function RinkHome() {
     [bezierSampledPaths, playbackTimeSec],
   );
 
+  const attachedActorIds = useMemo(
+    () => new Set(drawLines.flatMap((l) => l.attachedActorId ? [l.attachedActorId] : [])),
+    [drawLines],
+  );
+
   const activePlaybackEventIds = useMemo(
     () => new Set(getPlaybackEventsAtTime(derivedEvents, playbackTimeSec).map((e) => e.id)),
     [derivedEvents, playbackTimeSec],
@@ -698,6 +704,7 @@ export function RinkHome() {
     if (event.key !== "Escape") return;
     setSelectedNodeIndex(null);
     setPieMenuOpen(false);
+    setSelectedFrameNum(null);
   });
 
   useEffect(() => {
@@ -815,6 +822,7 @@ export function RinkHome() {
     setSelectedAnnotationId(null);
     setSelectedDrawLineId(null);
     setPieMenuOpen(false);
+    setSelectedFrameNum(null);
   }
 
   function commitSnapshot(nextSnapshot: EditorSnapshot) {
@@ -1556,6 +1564,17 @@ export function RinkHome() {
     const path = paths.find((entry) => entry.actorId === actorId);
     if (!path?.points.length) return;
 
+    // When a frame is selected in the timeline, clicking any actor opens the frame menu
+    // for that actor at the selected frame.
+    if (selectedFrameNum !== null) {
+      event.stopPropagation();
+      const targetTime = selectedFrameNum * 2;
+      const nodeIdx = findNearestNodeIndex(actorId, targetTime);
+      const nodePt = path.points[nodeIdx];
+      if (nodePt) openFrameNodeMenu(actorId, nodeIdx, selectedFrameNum, nodePt);
+      return;
+    }
+
     const pointerPoint = getRinkPointFromPointer(event.clientX, event.clientY)
       ?? { xFt: path.points[0].xFt, yFt: path.points[0].yFt };
     const draftStart = path.points.at(-1) ?? path.points[0];
@@ -2196,26 +2215,30 @@ export function RinkHome() {
                     if (dlBezierNodes && dlBezierNodes.length >= 2) {
                       // Sample along the actual bezier curve so dots sit on the visible arc.
                       const table = buildBezierSampleTable(dlBezierNodes);
-                      for (let t = 2; t * speedFtPerSec < table.totalFt; t += 2) {
+                      for (let t = 0; t * speedFtPerSec < table.totalFt; t += 2) {
                         const pos = sampleBezierAtDistance(table, t * speedFtPerSec);
                         const tFrameNum = t / 2;
+                        const isTickSelected = selectedFrameNum === tFrameNum;
                         ticks.push(
                           <g key={`tick-${t}`} className="cursor-pointer" onClick={(e) => { e.stopPropagation(); const ni = findNearestNodeIndex(attachedActor.id, t); openFrameNodeMenu(attachedActor.id, ni, tFrameNum, pos); }}>
                             <circle cx={pos.xFt} cy={pos.yFt} r={3.5} fill="transparent" />
-                            <circle cx={pos.xFt} cy={pos.yFt} r={1.8} fill={tickFill} opacity={0.7} pointerEvents="none" />
+                            {isTickSelected && <circle cx={pos.xFt} cy={pos.yFt} r={4.2} fill="none" stroke="#93c5fd" strokeWidth={1.5} opacity={0.9} pointerEvents="none" />}
+                            <circle cx={pos.xFt} cy={pos.yFt} r={isTickSelected ? 2.8 : 1.8} fill={isTickSelected ? "#3b82f6" : tickFill} stroke={isTickSelected ? "#bfdbfe" : "none"} strokeWidth={isTickSelected ? 1 : 0} opacity={isTickSelected ? 1 : 0.7} pointerEvents="none" />
                           </g>,
                         );
                       }
                     } else {
                       // Fallback: straight polyline (no bezier nodes present).
                       const totalLen = line.totalLengthFt ?? measurePolylineDistanceFeet(line.points);
-                      for (let t = 2; t * speedFtPerSec < totalLen; t += 2) {
+                      for (let t = 0; t * speedFtPerSec < totalLen; t += 2) {
                         const pos = samplePointAlongPolyline(line.points, t * speedFtPerSec);
                         const tFrameNum = t / 2;
+                        const isTickSelected = selectedFrameNum === tFrameNum;
                         ticks.push(
                           <g key={`tick-${t}`} className="cursor-pointer" onClick={(e) => { e.stopPropagation(); const ni = findNearestNodeIndex(attachedActor.id, t); openFrameNodeMenu(attachedActor.id, ni, tFrameNum, pos); }}>
                             <circle cx={pos.xFt} cy={pos.yFt} r={3.5} fill="transparent" />
-                            <circle cx={pos.xFt} cy={pos.yFt} r={1.8} fill={tickFill} opacity={0.7} pointerEvents="none" />
+                            {isTickSelected && <circle cx={pos.xFt} cy={pos.yFt} r={4.2} fill="none" stroke="#93c5fd" strokeWidth={1.5} opacity={0.9} pointerEvents="none" />}
+                            <circle cx={pos.xFt} cy={pos.yFt} r={isTickSelected ? 2.8 : 1.8} fill={isTickSelected ? "#3b82f6" : tickFill} stroke={isTickSelected ? "#bfdbfe" : "none"} strokeWidth={isTickSelected ? 1 : 0} opacity={isTickSelected ? 1 : 0.7} pointerEvents="none" />
                           </g>,
                         );
                       }
@@ -2409,23 +2432,28 @@ export function RinkHome() {
                     const isSelectedNode = isActive && index === selectedNodeIndex;
                     // Draw-line-attached actors already have timing ticks rendered on the draw line itself.
                     // Only show the numbered 2-second frame circles for standalone (non-attached) paths.
-                    const showNodeCircles = isActive && crossedFrameBoundary && !isDrawLineAttached;
+                    const isFrameHighlighted = selectedFrameNum !== null && frameNum === selectedFrameNum && crossedFrameBoundary && !isDrawLineAttached;
+                    const showNodeCircles = (isActive && crossedFrameBoundary && !isDrawLineAttached) || isFrameHighlighted;
                     const nodeActionColor: Record<string, string> = { pass: "#f59e0b", receive: "#22c55e", shot: "#ef4444" };
                     const actionIndicator = point.action && point.action !== "carry" ? point.action[0].toUpperCase() : null;
                     const breakType = getNodeBreakType(point);
+                    const isClickable = showNodeCircles && (isActive || isFrameHighlighted);
                     return (
                       <g
                         key={`${path.id}-node-${index}`}
-                        data-node-handle={isActive && showNodeCircles ? "true" : undefined}
-                        className={isActive && showNodeCircles ? "cursor-grab" : undefined}
-                        pointerEvents={isActive && showNodeCircles ? undefined : "none"}
-                        onClick={isActive && showNodeCircles ? (event) => {
+                        data-node-handle={isClickable ? "true" : undefined}
+                        className={isClickable ? "cursor-grab" : undefined}
+                        pointerEvents={isClickable ? undefined : "none"}
+                        onClick={isClickable ? (event) => {
                           event.stopPropagation();
                           openFrameNodeMenu(path.actorId, index, frameNum, point);
                         } : undefined}
                       >
                         {showNodeCircles && (
                           <>
+                            {isFrameHighlighted && (
+                              <circle cx={point.xFt} cy={point.yFt} r={5.8} fill="none" stroke="#93c5fd" strokeWidth={1.5} opacity={0.9} pointerEvents="none" />
+                            )}
                             {isSelectedNode && (
                               <circle cx={point.xFt} cy={point.yFt} r={5.5} fill="none" stroke="#f59e0b" strokeWidth={1.4} opacity={0.9} pointerEvents="none" />
                             )}
@@ -2443,10 +2471,10 @@ export function RinkHome() {
                             <circle
                               cx={point.xFt}
                               cy={point.yFt}
-                              r={isActive ? 3.0 : 2.2}
+                              r={isFrameHighlighted ? 3.4 : isActive ? 3.0 : 2.2}
                               fill={point.action && point.action !== "carry" ? nodeActionColor[point.action] ?? "#3b82f6" : "#3b82f6"}
-                              stroke="white"
-                              strokeWidth={0.8}
+                              stroke={isFrameHighlighted ? "#bfdbfe" : "white"}
+                              strokeWidth={isFrameHighlighted ? 1.2 : 0.8}
                               pointerEvents="none"
                             />
                             <text
@@ -2581,6 +2609,8 @@ export function RinkHome() {
               bezierSampledPaths={bezierSampledPaths}
               actors={actors}
               derivedEvents={derivedEvents}
+              attachedActorIds={attachedActorIds}
+              onAttachedActorPointerDown={handleActorTokenPointerDown}
             />
           </svg>
 
@@ -3511,6 +3541,7 @@ export function RinkHome() {
                 items={frameActionItems}
                 centerLabel={String(frameNodeMenu.frameNum)}
                 onClose={close}
+                variant="blue"
               />
             );
           })()}
@@ -3589,17 +3620,21 @@ export function RinkHome() {
                       const t = startTime + i * 2;
                       if (t > endTime + 0.1) return null;
                       const px = (t / timelineMaxTime) * 100;
+                      const isSelected = selectedFrameNum === i;
                       return (
                         <span
                           key={i}
-                          className="wb-stage-indicator"
-                          style={{ left: `${px}%`, backgroundColor: color.stroke, cursor: i > 0 ? "pointer" : undefined }}
-                          onClick={i > 0 ? (e) => {
+                          className={`wb-stage-indicator${isSelected ? " wb-stage-indicator--selected" : ""}`}
+                          style={{ left: `${px}%`, backgroundColor: color.stroke, cursor: "pointer" }}
+                          onClick={(e) => {
                             e.stopPropagation();
                             const nodeIdx = findNearestNodeIndex(path.actorId, t);
                             const nodePt = path.points[nodeIdx];
-                            if (nodePt) openFrameNodeMenu(path.actorId, nodeIdx, i, nodePt);
-                          } : undefined}
+                            if (nodePt) {
+                              openFrameNodeMenu(path.actorId, nodeIdx, i, nodePt);
+                              setSelectedFrameNum((prev) => prev === i ? null : i);
+                            }
+                          }}
                         >
                           {i === 0 ? getActorTokenLabel(actor, path.actorId) : i}
                         </span>
@@ -4681,11 +4716,15 @@ const PlaybackLayer = memo(function PlaybackLayer({
   bezierSampledPaths,
   actors,
   derivedEvents,
+  attachedActorIds,
+  onAttachedActorPointerDown,
 }: {
   playbackTimeRef: React.RefObject<number>;
   bezierSampledPaths: SerializedPath[];
   actors: SerializedActor[];
   derivedEvents: ReturnType<typeof deriveEventsForDrill>;
+  attachedActorIds: ReadonlySet<string>;
+  onAttachedActorPointerDown: (event: React.PointerEvent<SVGGElement>, actorId: string) => void;
 }) {
   const [playbackStates, setPlaybackStates] = useState<ReturnType<typeof getDrillPlaybackStates>>([]);
   const [puckState, setPuckState] = useState<ReturnType<typeof getPuckStateAtTime>>(null);
@@ -4715,8 +4754,16 @@ const PlaybackLayer = memo(function PlaybackLayer({
         const actor = actors.find((a) => a.id === state.actorId);
         const teamRole = state.teamRole ?? actor?.teamRole ?? "neutral";
         const color = getActorColor(actor, teamRole);
+        const isAttached = attachedActorIds.has(state.actorId);
         return (
-          <g key={`${state.pathId}-playback`} pointerEvents="none">
+          <g
+            key={`${state.pathId}-playback`}
+            data-node-handle={isAttached ? "true" : undefined}
+            className={isAttached ? "cursor-grab" : undefined}
+            pointerEvents={isAttached ? undefined : "none"}
+            onPointerDown={isAttached ? (e) => onAttachedActorPointerDown(e, state.actorId) : undefined}
+            onClick={isAttached ? (e) => e.stopPropagation() : undefined}
+          >
             <circle cx={state.position.xFt} cy={state.position.yFt} r={4.2} fill={color.token} stroke="white" strokeWidth={0.9} opacity={0.95} />
             <text x={state.position.xFt} y={state.position.yFt + 1.5} textAnchor="middle" fontSize="3.2" fontWeight="800" fill="white">
               {getActorTokenLabel(actor, state.actorId)}
