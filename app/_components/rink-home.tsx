@@ -156,12 +156,6 @@ type RouteLegendItem = {
 
 const INITIAL_ACTORS: SerializedActor[] = [];
 
-// Goal line positions match hockeyCanadaRinkSpec (11 ft from each end board, centre y = 42.5 ft)
-const INITIAL_ANNOTATIONS: SerializedAnnotation[] = [
-  { id: "default-net-left",  type: "net", xFt: 11,  yFt: 42.5, teamRole: "neutral", rotationDeg: 0   },
-  { id: "default-net-right", type: "net", xFt: 189, yFt: 42.5, teamRole: "neutral", rotationDeg: 180 },
-];
-
 function createDefaultAnchorPoint(
   teamRole: SerializedActor["teamRole"],
   slotIndex = 0,
@@ -198,6 +192,12 @@ function createDefaultPathForActor(
 }
 
 const INITIAL_PATHS: SerializedPath[] = INITIAL_ACTORS.map((actor, index) => createDefaultPathForActor(actor, index));
+
+// Default nets placed on the goal lines at centre ice (x=11, x=189; y=42.5)
+const INITIAL_ANNOTATIONS: SerializedAnnotation[] = [
+  { id: "net-default-left", type: "net", xFt: 11, yFt: 42.5, teamRole: "neutral", rotationDeg: 0 },
+  { id: "net-default-right", type: "net", xFt: 189, yFt: 42.5, teamRole: "neutral", rotationDeg: 180 },
+];
 
 const AGE_GROUP_OPTIONS = [
   "U7", "U8", "U9", "U10", "U11", "U12", "U13",
@@ -312,7 +312,7 @@ export function RinkHome() {
   const [curveIntensity, setCurveIntensity] = useState(0.65);
   const [selectedPoint, setSelectedPoint] = useState<SelectedPoint | null>(null);
   const [actors, setActors] = useState(INITIAL_ACTORS);
-  const [annotations, setAnnotations] = useState<SerializedAnnotation[]>(() => INITIAL_ANNOTATIONS.map((a) => ({ ...a })));
+  const [annotations, setAnnotations] = useState<SerializedAnnotation[]>(INITIAL_ANNOTATIONS);
   const [paths, setPaths] = useState(INITIAL_PATHS);
   const [activeActorId, setActiveActorId] = useState<string | null>(INITIAL_ACTORS[0]?.id ?? null);
   const [selectedRouteActorId, setSelectedRouteActorId] = useState<string | null>(INITIAL_ACTORS[0]?.id ?? null);
@@ -428,6 +428,13 @@ export function RinkHome() {
   const actorPieMenuRafRef = useRef<number | null>(null);
   const annotationPieMenuRafRef = useRef<number | null>(null);
   const drawLinePieMenuRafRef = useRef<number | null>(null);
+  const [frameNodeMenu, setFrameNodeMenu] = useState<{
+    actorId: string;
+    nodeIndex: number;
+    frameNum: number;
+    leftPx: number;
+    topPx: number;
+  } | null>(null);
 
   const getMenuPositionFromPoint = useCallback((point: { xFt: number; yFt: number }) => {
     const svg = overlaySvgRef.current;
@@ -1591,6 +1598,72 @@ export function RinkHome() {
     setSelectedNodeIndex((prev) => (prev === nodeIndex && activeActorId === actorId) ? null : nodeIndex);
   }
 
+  function findNearestNodeIndex(actorId: string, targetTimeSec: number): number {
+    const actorPath = paths.find((p) => p.actorId === actorId);
+    if (!actorPath || actorPath.points.length === 0) return 0;
+    let bestIndex = 0;
+    let bestDist = Infinity;
+    actorPath.points.forEach((pt, i) => {
+      const d = Math.abs((pt.timeSec ?? 0) - targetTimeSec);
+      if (d < bestDist) { bestDist = d; bestIndex = i; }
+    });
+    return bestIndex;
+  }
+
+  function openFrameNodeMenu(actorId: string, nodeIndex: number, frameNum: number, point: { xFt: number; yFt: number }) {
+    if (dragMovedRef.current) return;
+    const pos = getMenuPositionFromPoint(point);
+    if (!pos) return;
+    setPieMenuOpen(false);
+    setIsPlaying(false);
+    setPlaybackTime(frameNum * 2);
+    setFrameNodeMenu({ actorId, nodeIndex, frameNum, leftPx: pos.leftPx, topPx: pos.topPx });
+  }
+
+  function setFrameNodeMetadata(actorId: string, nodeIndex: number, meta: Record<string, unknown>) {
+    updateWithHistory((snap) => ({
+      ...snap,
+      paths: snap.paths.map((p) => {
+        if (p.actorId !== actorId) return p;
+        return {
+          ...p,
+          points: p.points.map((pt, i) =>
+            i === nodeIndex
+              ? { ...pt, metadata: { ...(pt.metadata ?? {}), ...meta } }
+              : pt,
+          ),
+        };
+      }),
+    }));
+  }
+
+  function setFrameNodeAction(actorId: string, nodeIndex: number, action: RuntimePathAction) {
+    updateWithHistory((snap) => ({
+      ...snap,
+      paths: snap.paths.map((p) => {
+        if (p.actorId !== actorId) return p;
+        return {
+          ...p,
+          points: p.points.map((pt, i) => i === nodeIndex ? { ...pt, action } : pt),
+        };
+      }),
+    }));
+  }
+
+  function claimPuck(actorId: string, nodeIndex: number) {
+    updateWithHistory((snap) => ({
+      ...snap,
+      paths: snap.paths.map((p) => ({
+        ...p,
+        points: p.points.map((pt, i) => {
+          const isClaim = p.actorId === actorId && i === nodeIndex;
+          if (!isClaim && !pt.metadata?.puckClaim) return pt;
+          return { ...pt, metadata: { ...(pt.metadata ?? {}), puckClaim: isClaim } };
+        }),
+      })),
+    }));
+  }
+
   function handleBezierGroupPointerDown(
     event: React.PointerEvent,
     pathId: string,
@@ -2125,8 +2198,12 @@ export function RinkHome() {
                       const table = buildBezierSampleTable(dlBezierNodes);
                       for (let t = 2; t * speedFtPerSec < table.totalFt; t += 2) {
                         const pos = sampleBezierAtDistance(table, t * speedFtPerSec);
+                        const tFrameNum = t / 2;
                         ticks.push(
-                          <circle key={`tick-${t}`} cx={pos.xFt} cy={pos.yFt} r={1.8} fill={tickFill} opacity={0.7} pointerEvents="none" />,
+                          <g key={`tick-${t}`} className="cursor-pointer" onClick={(e) => { e.stopPropagation(); const ni = findNearestNodeIndex(attachedActor.id, t); openFrameNodeMenu(attachedActor.id, ni, tFrameNum, pos); }}>
+                            <circle cx={pos.xFt} cy={pos.yFt} r={3.5} fill="transparent" />
+                            <circle cx={pos.xFt} cy={pos.yFt} r={1.8} fill={tickFill} opacity={0.7} pointerEvents="none" />
+                          </g>,
                         );
                       }
                     } else {
@@ -2134,8 +2211,12 @@ export function RinkHome() {
                       const totalLen = line.totalLengthFt ?? measurePolylineDistanceFeet(line.points);
                       for (let t = 2; t * speedFtPerSec < totalLen; t += 2) {
                         const pos = samplePointAlongPolyline(line.points, t * speedFtPerSec);
+                        const tFrameNum = t / 2;
                         ticks.push(
-                          <circle key={`tick-${t}`} cx={pos.xFt} cy={pos.yFt} r={1.8} fill={tickFill} opacity={0.7} pointerEvents="none" />,
+                          <g key={`tick-${t}`} className="cursor-pointer" onClick={(e) => { e.stopPropagation(); const ni = findNearestNodeIndex(attachedActor.id, t); openFrameNodeMenu(attachedActor.id, ni, tFrameNum, pos); }}>
+                            <circle cx={pos.xFt} cy={pos.yFt} r={3.5} fill="transparent" />
+                            <circle cx={pos.xFt} cy={pos.yFt} r={1.8} fill={tickFill} opacity={0.7} pointerEvents="none" />
+                          </g>,
                         );
                       }
                     }
@@ -2274,7 +2355,14 @@ export function RinkHome() {
                   {path.points.map((point, index) => {
                     const isTokenNode = index === 0;
                     const shortLabel = getActorTokenLabel(actor, path.actorId);
-                    const stageLabel = isTokenNode ? shortLabel : String(index);
+                    // Only show a numbered circle when this node crosses a 2-second boundary
+                    // (i.e. floor(timeSec/2) increased), so the rink markers match the timeline stage indicators.
+                    const prevTimeSec = index > 0 ? (path.points[index - 1].timeSec ?? 0) : -1;
+                    const prevFrame = Math.floor(prevTimeSec / 2);
+                    const currFrame = Math.floor((point.timeSec ?? 0) / 2);
+                    const crossedFrameBoundary = !isTokenNode && currFrame > prevFrame && currFrame > 0;
+                    const frameNum = crossedFrameBoundary ? currFrame : 0;
+                    const stageLabel = isTokenNode ? shortLabel : String(frameNum);
 
                     // For actors attached to a draw line the PlaybackLayer renders
                     // the moving token. Hide the static token once the timeline has
@@ -2319,7 +2407,9 @@ export function RinkHome() {
                     }
 
                     const isSelectedNode = isActive && index === selectedNodeIndex;
-                    const showNodeCircles = false;
+                    // Draw-line-attached actors already have timing ticks rendered on the draw line itself.
+                    // Only show the numbered 2-second frame circles for standalone (non-attached) paths.
+                    const showNodeCircles = isActive && crossedFrameBoundary && !isDrawLineAttached;
                     const nodeActionColor: Record<string, string> = { pass: "#f59e0b", receive: "#22c55e", shot: "#ef4444" };
                     const actionIndicator = point.action && point.action !== "carry" ? point.action[0].toUpperCase() : null;
                     const breakType = getNodeBreakType(point);
@@ -2331,7 +2421,7 @@ export function RinkHome() {
                         pointerEvents={isActive && showNodeCircles ? undefined : "none"}
                         onClick={isActive && showNodeCircles ? (event) => {
                           event.stopPropagation();
-                          handleNodeClick(path.actorId, index);
+                          openFrameNodeMenu(path.actorId, index, frameNum, point);
                         } : undefined}
                       >
                         {showNodeCircles && (
@@ -2354,8 +2444,8 @@ export function RinkHome() {
                               cx={point.xFt}
                               cy={point.yFt}
                               r={isActive ? 3.0 : 2.2}
-                              fill={point.action && point.action !== "carry" ? nodeActionColor[point.action] ?? color.fill : color.fill}
-                              stroke={color.stroke}
+                              fill={point.action && point.action !== "carry" ? nodeActionColor[point.action] ?? "#3b82f6" : "#3b82f6"}
+                              stroke="white"
                               strokeWidth={0.8}
                               pointerEvents="none"
                             />
@@ -3142,6 +3232,289 @@ export function RinkHome() {
             );
           })()}
 
+          {/* Frame action menu — opens when a blue frame marker node is clicked */}
+          {frameNodeMenu && (() => {
+            const menuPath = paths.find((p) => p.actorId === frameNodeMenu.actorId);
+            const framePoint = menuPath?.points[frameNodeMenu.nodeIndex];
+            if (!framePoint) return null;
+            const meta = (framePoint.metadata ?? {}) as Record<string, unknown>;
+            const currentAction = framePoint.action;
+            const breakType = getNodeBreakType(framePoint);
+            const actorId = frameNodeMenu.actorId;
+            const nodeIdx = frameNodeMenu.nodeIndex;
+            const close = () => setFrameNodeMenu(null);
+
+            const passIcon = (
+              <g>
+                <circle cx="-4" cy="1" r="3.5" fill="currentColor" />
+                <line x1="-0.5" y1="1" x2="8" y2="-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                <polygon points="6,-6 10,-1 5.5,0.5" fill="currentColor" />
+              </g>
+            );
+            const shotIcon = (
+              <g>
+                <line x1="-8" y1="4" x2="5" y2="-3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                <polygon points="3,-5 9,0 5,3" fill="currentColor" />
+                <circle cx="-8" cy="4" r="2.5" fill="currentColor" />
+              </g>
+            );
+            const noteIcon = (
+              <g>
+                <rect x="-6" y="-7" width="12" height="14" rx="2" fill="currentColor" opacity="0.8" />
+                <line x1="-3" y1="-3" x2="3" y2="-3" stroke="white" strokeWidth="1.5" strokeLinecap="round" />
+                <line x1="-3" y1="0" x2="3" y2="0" stroke="white" strokeWidth="1.5" strokeLinecap="round" />
+                <line x1="-3" y1="3" x2="1" y2="3" stroke="white" strokeWidth="1.5" strokeLinecap="round" />
+              </g>
+            );
+            const segSkateIcon = (
+              <g>
+                <polygon points="-8,6 0,-6 8,6" fill="none" stroke="currentColor" strokeWidth="2" />
+                <rect x="-0.8" y="-6" width="1.6" height="10" fill="currentColor" />
+              </g>
+            );
+            const directionIcon = (
+              <g stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none">
+                <path d="M-7,4 C-7,-4 7,-4 7,4" />
+                <polygon points="5,2 9,6 4,7" fill="currentColor" />
+              </g>
+            );
+            const puckClaimIcon = (
+              <g>
+                <ellipse cx="0" cy="2" rx="7" ry="3" fill="currentColor" opacity="0.35" />
+                <circle cx="0" cy="0" r="5" fill="currentColor" />
+              </g>
+            );
+            const stopIcon = (
+              <g fill="currentColor">
+                <rect x="-5" y="-5" width="10" height="10" rx="1" />
+              </g>
+            );
+            const pivotIcon = (
+              <g stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none">
+                <path d="M-6,5 C-6,-5 6,-5 6,5" />
+                <polygon points="-4,3 -8,7 0,8" fill="currentColor" />
+              </g>
+            );
+
+            const frameActionItems: PieMenuItem[] = [
+              {
+                id: "fa-pass",
+                label: "PASS",
+                icon: passIcon,
+                active: currentAction === "pass",
+                subItems: [
+                  {
+                    id: "pass-regular",
+                    label: "Pass",
+                    active: currentAction === "pass" && (!meta.passType || meta.passType === "regular"),
+                    action: () => { setFrameNodeAction(actorId, nodeIdx, "pass"); setFrameNodeMetadata(actorId, nodeIdx, { passType: "regular" }); close(); },
+                  },
+                  {
+                    id: "pass-back",
+                    label: "Pass Back",
+                    active: currentAction === "pass" && meta.passType === "back",
+                    action: () => { setFrameNodeAction(actorId, nodeIdx, "pass"); setFrameNodeMetadata(actorId, nodeIdx, { passType: "back" }); close(); },
+                  },
+                  {
+                    id: "pass-dump",
+                    label: "Dump Zone",
+                    active: currentAction === "pass" && meta.passType === "dump",
+                    action: () => { setFrameNodeAction(actorId, nodeIdx, "pass"); setFrameNodeMetadata(actorId, nodeIdx, { passType: "dump" }); close(); },
+                  },
+                  {
+                    id: "pass-drop",
+                    label: "Drop Pass",
+                    active: currentAction === "pass" && meta.passType === "drop",
+                    action: () => { setFrameNodeAction(actorId, nodeIdx, "pass"); setFrameNodeMetadata(actorId, nodeIdx, { passType: "drop" }); close(); },
+                  },
+                  {
+                    id: "pass-tip",
+                    label: "Tip Shot",
+                    active: currentAction === "pass" && meta.passType === "tip",
+                    action: () => { setFrameNodeAction(actorId, nodeIdx, "pass"); setFrameNodeMetadata(actorId, nodeIdx, { passType: "tip" }); close(); },
+                  },
+                ],
+              },
+              {
+                id: "fa-shot",
+                label: "SHOT",
+                icon: shotIcon,
+                active: currentAction === "shot",
+                subItems: [
+                  {
+                    id: "shot-wrist",
+                    label: "Wrist",
+                    active: currentAction === "shot" && meta.shotType === "wrist",
+                    action: () => { setFrameNodeAction(actorId, nodeIdx, "shot"); setFrameNodeMetadata(actorId, nodeIdx, { shotType: "wrist" }); },
+                  },
+                  {
+                    id: "shot-slap",
+                    label: "Slap",
+                    active: currentAction === "shot" && meta.shotType === "slap",
+                    action: () => { setFrameNodeAction(actorId, nodeIdx, "shot"); setFrameNodeMetadata(actorId, nodeIdx, { shotType: "slap" }); },
+                  },
+                  {
+                    id: "shot-snap",
+                    label: "Snap",
+                    active: currentAction === "shot" && meta.shotType === "snap",
+                    action: () => { setFrameNodeAction(actorId, nodeIdx, "shot"); setFrameNodeMetadata(actorId, nodeIdx, { shotType: "snap" }); },
+                  },
+                  {
+                    id: "shot-backhand",
+                    label: "Backhand",
+                    active: currentAction === "shot" && meta.shotType === "backhand",
+                    action: () => { setFrameNodeAction(actorId, nodeIdx, "shot"); setFrameNodeMetadata(actorId, nodeIdx, { shotType: "backhand" }); },
+                  },
+                  {
+                    id: "shot-near-top",
+                    label: "Near Top",
+                    active: meta.shotLocation === "near-top",
+                    action: () => setFrameNodeMetadata(actorId, nodeIdx, { shotLocation: "near-top" }),
+                  },
+                  {
+                    id: "shot-far-top",
+                    label: "Far Top",
+                    active: meta.shotLocation === "far-top",
+                    action: () => setFrameNodeMetadata(actorId, nodeIdx, { shotLocation: "far-top" }),
+                  },
+                  {
+                    id: "shot-near-bot",
+                    label: "Near Bot",
+                    active: meta.shotLocation === "near-bot",
+                    action: () => setFrameNodeMetadata(actorId, nodeIdx, { shotLocation: "near-bot" }),
+                  },
+                  {
+                    id: "shot-far-bot",
+                    label: "Far Bot",
+                    active: meta.shotLocation === "far-bot",
+                    action: () => setFrameNodeMetadata(actorId, nodeIdx, { shotLocation: "far-bot" }),
+                  },
+                  {
+                    id: "shot-five-hole",
+                    label: "5-Hole",
+                    active: meta.shotLocation === "five-hole",
+                    action: () => setFrameNodeMetadata(actorId, nodeIdx, { shotLocation: "five-hole" }),
+                  },
+                ],
+              },
+              {
+                id: "fa-note",
+                label: "NOTE",
+                icon: noteIcon,
+                active: !!(meta.note as string),
+                subItems: [
+                  {
+                    id: "note-input",
+                    label: "",
+                    input: {
+                      value: (meta.note as string) ?? "",
+                      placeholder: "Add note…",
+                      onChange: (val) => setFrameNodeMetadata(actorId, nodeIdx, { note: val }),
+                    },
+                  },
+                ],
+              },
+              {
+                id: "fa-skate",
+                label: "SKATE",
+                icon: segSkateIcon,
+                subItems: [
+                  {
+                    id: "seg-fwd",
+                    label: "Forward",
+                    active: !meta.segmentDir || meta.segmentDir === "forward",
+                    action: () => setFrameNodeMetadata(actorId, nodeIdx, { segmentDir: "forward" }),
+                  },
+                  {
+                    id: "seg-bwd",
+                    label: "Backward",
+                    active: meta.segmentDir === "backward",
+                    action: () => setFrameNodeMetadata(actorId, nodeIdx, { segmentDir: "backward" }),
+                  },
+                  {
+                    id: "seg-lat",
+                    label: "Lateral",
+                    active: meta.segmentDir === "lateral",
+                    action: () => setFrameNodeMetadata(actorId, nodeIdx, { segmentDir: "lateral" }),
+                  },
+                  ...SPEED_OPTIONS.slice(1).map((opt, j) => ({
+                    id: `seg-speed-${j + 1}`,
+                    label: opt.title,
+                    icon: opt.icon,
+                    active: meta.segmentSpeed === j + 1,
+                    action: () => setFrameNodeMetadata(actorId, nodeIdx, { segmentSpeed: j + 1 }),
+                    keepOpen: true,
+                  } as PieMenuItem)),
+                ],
+              },
+              {
+                id: "fa-direction",
+                label: "DIRECTION",
+                icon: directionIcon,
+                subItems: [
+                  {
+                    id: "dir-left",
+                    label: "Turn Left",
+                    active: meta.turnDirection === "left",
+                    action: () => setFrameNodeMetadata(actorId, nodeIdx, { turnDirection: "left" }),
+                  },
+                  {
+                    id: "dir-right",
+                    label: "Turn Right",
+                    active: meta.turnDirection === "right",
+                    action: () => setFrameNodeMetadata(actorId, nodeIdx, { turnDirection: "right" }),
+                  },
+                  {
+                    id: "dir-reverse",
+                    label: "Reverse",
+                    active: meta.turnDirection === "reverse",
+                    action: () => setFrameNodeMetadata(actorId, nodeIdx, { turnDirection: "reverse" }),
+                  },
+                ],
+              },
+              {
+                id: "fa-claim-puck",
+                label: "CLAIM PUCK",
+                icon: puckClaimIcon,
+                active: !!meta.puckClaim,
+                action: () => {
+                  if (meta.puckClaim) {
+                    setFrameNodeMetadata(actorId, nodeIdx, { puckClaim: false });
+                  } else {
+                    claimPuck(actorId, nodeIdx);
+                  }
+                },
+              },
+              {
+                id: "fa-stop",
+                label: "STOP",
+                icon: stopIcon,
+                active: currentAction === "stop",
+                action: () => setFrameNodeAction(actorId, nodeIdx, currentAction === "stop" ? "carry" : "stop"),
+              },
+              {
+                id: "fa-pivot",
+                label: "PIVOT",
+                icon: pivotIcon,
+                active: breakType === "pivot",
+                action: () => {
+                  const nextBreak = breakType === "pivot" ? undefined : "pivot";
+                  setFrameNodeMetadata(actorId, nodeIdx, { breakType: nextBreak });
+                },
+              },
+            ];
+
+            return (
+              <PieMenu
+                leftPx={frameNodeMenu.leftPx}
+                topPx={frameNodeMenu.topPx}
+                items={frameActionItems}
+                centerLabel={String(frameNodeMenu.frameNum)}
+                onClose={close}
+              />
+            );
+          })()}
+
           
         </div>
 
@@ -3220,7 +3593,13 @@ export function RinkHome() {
                         <span
                           key={i}
                           className="wb-stage-indicator"
-                          style={{ left: `${px}%`, backgroundColor: color.stroke }}
+                          style={{ left: `${px}%`, backgroundColor: color.stroke, cursor: i > 0 ? "pointer" : undefined }}
+                          onClick={i > 0 ? (e) => {
+                            e.stopPropagation();
+                            const nodeIdx = findNearestNodeIndex(path.actorId, t);
+                            const nodePt = path.points[nodeIdx];
+                            if (nodePt) openFrameNodeMenu(path.actorId, nodeIdx, i, nodePt);
+                          } : undefined}
                         >
                           {i === 0 ? getActorTokenLabel(actor, path.actorId) : i}
                         </span>
@@ -4402,12 +4781,16 @@ function AnnotationOverlayItem(
         </g>
       );
     case "net": {
-      // Canonical orientation: mouth opens toward +X (right).
-      // Anchor = centre of mouth opening (on the goal line).
-      // Body extends to -X: posts at (0, ±3), back corners at (-2.93, ±3),
-      // back wall at x = -3.33, corner radius 0.4 ft.
-      // rotationDeg=0 → left net (mouth faces centre ice); 180 → right net.
+      // Plan-view hockey net: 88" outer width (±3.67ft), 40" deep (3.33ft), 72" inner posts (±3ft).
+      // Shape: straight sides + quarter-circle arcs at the two back corners + straight back wall.
+      // Opening faces +x (right); rotationDeg spins the whole group.
       const rot = annotation.rotationDeg ?? 0;
+      const fs = isSelected ? 1.0 : 0.7;
+      const R = 1.2;    // back-corner arc radius (ft)
+      const hw = 3.67;  // half outer width (ft)
+      const d = 3.33;   // depth — back wall at x = -d
+      // Path: front-top → straight side → arc → straight back → arc → straight side → front-bottom
+      const outerFrame = `M 0 ${-hw} L ${-(d - R)} ${-hw} A ${R} ${R} 0 0 0 ${-d} ${-(hw - R)} L ${-d} ${hw - R} A ${R} ${R} 0 0 0 ${-(d - R)} ${hw} L 0 ${hw}`;
       return (
         <g
           data-annotation-handle="true"
@@ -4416,24 +4799,15 @@ function AnnotationOverlayItem(
           onClick={stopAnnotationClick}
           transform={`translate(${annotation.xFt}, ${annotation.yFt}) rotate(${rot})`}
         >
-          {/* Net interior fill */}
-          <path
-            d="M 0,-3 L -1.83,-3 A 1.5,1.5 0 0 0 -3.33,-1.5 L -3.33,1.5 A 1.5,1.5 0 0 0 -1.83,3 L 0,3 Z"
-            fill="rgba(239,68,68,0.08)"
-            stroke="none"
-          />
-          {/* Side + back frame */}
-          <path
-            d="M 0,-3 L -1.83,-3 A 1.5,1.5 0 0 0 -3.33,-1.5 L -3.33,1.5 A 1.5,1.5 0 0 0 -1.83,3 L 0,3"
-            fill="none"
-            stroke="#ef4444"
-            strokeWidth={0.25}
-            strokeLinecap="round"
-          />
-          {/* Front face: posts + crossbar (thicker) */}
-          <line x1="0" y1="-3" x2="0" y2="3" stroke="#ef4444" strokeWidth={0.5} strokeLinecap="round" />
-          {/* Centre pipe */}
-          <line x1="0" y1="0" x2="-3.33" y2="0" stroke="#ef4444" strokeWidth={0.2} strokeOpacity={0.5} />
+          {/* Translucent fill – close with Z draws the front face bar implicitly */}
+          <path d={outerFrame + " Z"} fill="rgba(220,38,38,0.09)" stroke="none" />
+          {/* Outer frame – two sides, two corner arcs, flat back wall */}
+          <path d={outerFrame} fill="none" stroke="#dc2626" strokeWidth={fs} strokeLinecap="round" strokeLinejoin="round" />
+          {/* Front face bar */}
+          <line x1={0} y1={-hw} x2={0} y2={hw} stroke="#dc2626" strokeWidth={fs} strokeLinecap="round" />
+          {/* Goalposts */}
+          <circle cx={0} cy={-3} r={0.42} fill="#dc2626" />
+          <circle cx={0} cy={3} r={0.42} fill="#dc2626" />
         </g>
       );
     }
